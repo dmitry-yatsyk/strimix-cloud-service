@@ -135,8 +135,8 @@ export function buildTrafficRulesSeedQuery(projectId: string, datasetId: string)
 values
 -- Utm stage: projection pair for non-web ads (all-or-nothing, per-row truth)
 -- ad_destination taxonomy is always lowercase from connectors — no (?i)
-('sys_utm_projection_ad_costs', 1000, true, true, 'utm', 'ad_cost', false, null, null, '^(call|chat|app|lead_form|engagement|catalog|multi_destination|unknown)$', null, null, '{data_source}', '(not set)', '{campaign_name}', '{adgroup_name}', '{ad_name}', null, null),
-('sys_utm_projection_visits', 1001, true, true, 'utm', 'visit', false, null, null, '^(call|chat|app|lead_form|engagement|catalog|multi_destination|unknown)$', null, null, '{data_source}', '(not set)', '{campaign_name}', '{adgroup_name}', '{ad_name}', null, null),
+('sys_utm_projection_ad_costs', 1000, false, true, 'utm', 'ad_cost', false, null, null, '^(call|chat|app|lead_form|engagement|catalog|multi_destination|unknown)$', null, null, '{data_source}', '(not set)', '{campaign_name}', '{adgroup_name}', '{ad_name}', null, null),
+('sys_utm_projection_visits', 1001, false, true, 'utm', 'visit', false, null, null, '^(call|chat|app|lead_form|engagement|catalog|multi_destination|unknown)$', null, null, '{data_source}', '(not set)', '{campaign_name}', '{adgroup_name}', '{ad_name}', null, null),
 -- Origin stage: paid sources by utm labels ((?i) — catch Facebook/FACEBOOK/…)
 ('sys_origin_google_ads', 1000, true, true, 'origin', 'both', null, '(?i)^(google|adwords|google[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_search|paidsearch)$', null, null, null, null, null, null, null, null, 'Google Ads', null),
 ('sys_origin_bing_ads', 1010, true, true, 'origin', 'both', null, '(?i)^(bing|bing[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_search|paidsearch)$', null, null, null, null, null, null, null, null, 'Bing Ads', null),
