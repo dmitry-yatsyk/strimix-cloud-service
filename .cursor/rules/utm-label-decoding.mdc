@@ -1,0 +1,28 @@
+---
+description: Декодирование UTM-меток - '+' как пробел это корректное поведение
+globs: src/modules/gcloud/bigquery/**
+alwaysApply: false
+---
+
+# UTM-метки: '+' → пробел — это НЕ баг
+
+Канонические метки визитов (source, medium, campaign, content, term,
+strimix_refid) приходят из event_params трекера, который декодирует
+query-строку по правилам form-encoding (URLSearchParams): '+' превращается
+в пробел, литеральный плюс передаётся как '%2B'.
+
+Рекламные сети отдают метки в costs-джобы в ТОМ ЖЕ form-decoded виде
+(без '+'). Матчинг расходов и визитов по UTM-меткам опирается на это
+совпадение форматов.
+
+UDF `decode_uri_component` в `calculate-events-attribution.sql` реализует
+ровно это поведение: сначала '+' → пробел, затем decodeURIComponent.
+Через неё декодируются и url_params — они КОНСИСТЕНТНЫ с метками.
+
+Поэтому:
+- НЕ «чинить» пропавший '+' в метках page_views/visits.
+- НЕ перечитывать метки из page_location голым decodeURIComponent
+  (без замены '+') — это сломает матчинг расходов и визитов.
+- НЕ убирать замену '+' из decode_uri_component: url_params и метки
+  обязаны декодироваться одинаково, на этом стоят url_param-условия
+  в traffic_rules.
