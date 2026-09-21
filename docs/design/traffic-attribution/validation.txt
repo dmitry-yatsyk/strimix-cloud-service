@@ -1,0 +1,27 @@
+PASS URL list paginates 15 seeded exclusions
+PASS Second page shows the remaining 7 exclusions
+PASS New URL exclusion saves in demo state
+PASS URL exclusion can be disabled
+PASS Deletion requires confirmation and removes the exclusion
+PASS URL preview removes tracking parameters and retains functional parameters
+PASS Referrer editor rejects URLs instead of hosts
+PASS Bulk referrer input normalizes and deduplicates hosts
+PASS Rule editor saves output fields and returns to rules
+PASS Stage selection exposes only applicable output fields
+PASS Mapping entity controls the valid parameter container
+PASS Mapping editor saves entity, container, and priority consistently
+PASS urls has no page-level horizontal overflow at 1600px
+PASS url-editor has no page-level horizontal overflow at 1600px
+PASS referrers has no page-level horizontal overflow at 1600px
+PASS rules has no page-level horizontal overflow at 1600px
+PASS rule-editor has no page-level horizontal overflow at 1600px
+PASS mappings has no page-level horizontal overflow at 1600px
+PASS mapping-editor has no page-level horizontal overflow at 1600px
+PASS urls has no page-level horizontal overflow at 390px
+PASS url-editor has no page-level horizontal overflow at 390px
+PASS referrers has no page-level horizontal overflow at 390px
+PASS rules has no page-level horizontal overflow at 390px
+PASS rule-editor has no page-level horizontal overflow at 390px
+PASS mappings has no page-level horizontal overflow at 390px
+PASS mapping-editor has no page-level horizontal overflow at 390px
+PASS No browser JavaScript exceptions
