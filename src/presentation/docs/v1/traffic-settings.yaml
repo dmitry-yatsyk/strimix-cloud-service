@@ -921,8 +921,11 @@ components:
             Label outputs may use these placeholders and nothing else, with no
             expression evaluation: `{data_source}`, `{campaign_id}`,
             `{campaign_name}`, `{adgroup_id}`, `{adgroup_name}`, `{ad_id}`,
-            `{ad_name}`. A rule using placeholders fires only when all five
-            canonical labels are still empty.
+            `{ad_name}`, `{source}`, `{medium}`, `{campaign}`, `{content}`,
+            `{term}`. Ad macros come from the matched cost group; the five
+            label macros come from the row's incoming labels. A rule using
+            placeholders fires only when all five canonical labels are still
+            empty.
         set_traffic_origin:
           type: string
           nullable: true

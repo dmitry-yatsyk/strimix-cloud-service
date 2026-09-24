@@ -153,9 +153,9 @@ function checkPriority(priority: unknown, field: string, errors: IValidationIssu
 }
 
 /**
- * Reports placeholders that are not on the allowlist. Only the seven ad identity
- * placeholders exist; there are no arbitrary macros and no expression
- * evaluation.
+ * Reports placeholders that are not on the allowlist. Only the twelve tokens in
+ * TRAFFIC_RULE_OUTPUT_PLACEHOLDERS are accepted; there are no arbitrary macros
+ * and no expression evaluation.
  */
 function checkPlaceholders(
   value: string | null,

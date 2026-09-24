@@ -184,9 +184,21 @@ test('a url param value pattern requires the key it tests', () => {
   )
 })
 
-test('only the seven ad identity placeholders are accepted, and only in label outputs', () => {
+test('only the allowlisted placeholders are accepted, and only in label outputs', () => {
   assert.deepEqual(
     validateTrafficRuleInput(ruleDraft({ set_campaign: '{campaign_name}' })).errors,
+    [],
+  )
+  assert.deepEqual(
+    validateTrafficRuleInput(
+      ruleDraft({
+        set_source: '{source}',
+        set_medium: '{medium}',
+        set_campaign: '{campaign}',
+        set_content: '{content}',
+        set_term: '{term}',
+      }),
+    ).errors,
     [],
   )
   assert.ok(

@@ -284,9 +284,10 @@ export const MAPPING_MATCH_REGEX_REQUIRED_PARAM_KEY: Record<string, string> = {
 }
 
 /**
- * The only placeholders allowed in utm `set_*` outputs. The attribution job
- * substitutes them from the resolved ad identity; no other macros exist and no
- * expression evaluation is supported.
+ * The only placeholders allowed in utm `set_*` outputs. Ad macros are
+ * substituted from the resolved ad identity; {source}/{medium}/{campaign}/
+ * {content}/{term} from the row's incoming labels. No other macros and no
+ * expression evaluation.
  */
 export const TRAFFIC_RULE_OUTPUT_PLACEHOLDERS = [
   'data_source',
@@ -296,6 +297,11 @@ export const TRAFFIC_RULE_OUTPUT_PLACEHOLDERS = [
   'adgroup_name',
   'ad_id',
   'ad_name',
+  'source',
+  'medium',
+  'campaign',
+  'content',
+  'term',
 ] as const
 
 /**

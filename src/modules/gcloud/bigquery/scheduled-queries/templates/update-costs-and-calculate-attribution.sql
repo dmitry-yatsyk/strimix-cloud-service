@@ -952,15 +952,18 @@ try {
 }
 """;
 
--- Подставляет плейсхолдеры рекламной идентичности в значение set_*-поля
--- utm-правила (правило проекции, разделы 3.2 и 6 ТЗ). Пример: правило
--- set_campaign='{campaign_name}' разворачивается в реальное название
--- кампании: на строке расходов — её собственное, на синтетическом визите —
--- однозначное значение зарезолвленной группы (неоднозначное вызывающий
--- код срезает в null; маркер '(combined)' сюда не попадает). Техника —
--- цепочка replace по семи поддерживаемым плейсхолдерам: отсутствующее
--- значение (null) становится пустой строкой, а полностью пустой результат
--- нормализуется в null, потому что пустых строк в метках не бывает.
+-- Подставляет плейсхолдеры в значение set_*-поля utm-правила (проекция
+-- рекламной идентичности и копирование исходных канонических UTM-меток,
+-- разделы 3.2 и 6 ТЗ). Пример: set_campaign='{campaign_name}' разворачивается
+-- в реальное название кампании: на строке расходов — её собственное, на
+-- синтетическом визите — однозначное значение зарезолвленной группы
+-- (неоднозначное вызывающий код срезает в null; маркер '(combined)' сюда
+-- не попадает). {source}/{medium}/{campaign}/{content}/{term} подставляют
+-- входящие канонические метки той же строки, которую правило переписывает
+-- (визит: v.*; ad_costs: t.*). Техника — цепочка replace: сначала семь
+-- рекламных плейсхолдеров, затем пять UTM; отсутствующее значение (null)
+-- становится пустой строкой, а полностью пустой результат нормализуется
+-- в null, потому что пустых строк в метках не бывает.
 create temporary function apply_placeholders(
   v string,
   ph_data_source string,
@@ -969,17 +972,27 @@ create temporary function apply_placeholders(
   ph_adgroup_id string,
   ph_adgroup_name string,
   ph_ad_id string,
-  ph_ad_name string
+  ph_ad_name string,
+  ph_source string,
+  ph_medium string,
+  ph_campaign string,
+  ph_content string,
+  ph_term string
 )
 as (
-  nullif(replace(replace(replace(replace(replace(replace(replace(v,
+  nullif(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(v,
     '{data_source}',   ifnull(ph_data_source, '')),
     '{campaign_id}',   ifnull(ph_campaign_id, '')),
     '{campaign_name}', ifnull(ph_campaign_name, '')),
     '{adgroup_id}',    ifnull(ph_adgroup_id, '')),
     '{adgroup_name}',  ifnull(ph_adgroup_name, '')),
     '{ad_id}',         ifnull(ph_ad_id, '')),
-    '{ad_name}',       ifnull(ph_ad_name, '')), '')
+    '{ad_name}',       ifnull(ph_ad_name, '')),
+    '{source}',        ifnull(ph_source, '')),
+    '{medium}',        ifnull(ph_medium, '')),
+    '{campaign}',      ifnull(ph_campaign, '')),
+    '{content}',       ifnull(ph_content, '')),
+    '{term}',          ifnull(ph_term, '')), '')
 );
 
 -- Возвращает true, если в значении set_*-поля есть хотя бы один плейсхолдер
@@ -2447,12 +2460,12 @@ matched as (
     -- '(combined)') срезается nullif-ом в null. В канонические метки
     -- визита попадают только настоящие значения; неоднозначность бакета
     -- показывает движок отчётов при чтении.
-    apply_placeholders(r.set_source, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)')) as val_source,
-    apply_placeholders(r.set_medium, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)')) as val_medium,
-    apply_placeholders(r.set_campaign, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)')) as val_campaign,
-    apply_placeholders(r.set_content, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)')) as val_content,
-    apply_placeholders(r.set_term, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)')) as val_term,
-    apply_placeholders(r.set_strimix_refid, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)')) as val_strimix_refid
+    apply_placeholders(r.set_source, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)'), v.source, v.medium, v.campaign, v.content, v.term) as val_source,
+    apply_placeholders(r.set_medium, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)'), v.source, v.medium, v.campaign, v.content, v.term) as val_medium,
+    apply_placeholders(r.set_campaign, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)'), v.source, v.medium, v.campaign, v.content, v.term) as val_campaign,
+    apply_placeholders(r.set_content, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)'), v.source, v.medium, v.campaign, v.content, v.term) as val_content,
+    apply_placeholders(r.set_term, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)'), v.source, v.medium, v.campaign, v.content, v.term) as val_term,
+    apply_placeholders(r.set_strimix_refid, nullif(g.g.data_source, '(combined)'), nullif(g.g.campaign_id, '(combined)'), nullif(g.g.campaign_name, '(combined)'), nullif(g.g.adgroup_id, '(combined)'), nullif(g.g.adgroup_name, '(combined)'), nullif(g.g.ad_id, '(combined)'), nullif(g.g.ad_name, '(combined)'), v.source, v.medium, v.campaign, v.content, v.term) as val_strimix_refid
   from `visits_staging` as v
   left join `visit_ad_groups` as g on g.visit_id = v.visit_id
   inner join utm_rules as r
@@ -3608,12 +3621,12 @@ matched as (
     -- подставляются ПОСТРОЧНО из сетевых колонок самой строки. Каждая
     -- тёзка получает своё настоящее название кампании/группы: метки строки
     -- всегда истинны для этой строки, '(combined)' не материализуется.
-    apply_placeholders(r.set_source, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name) as val_source,
-    apply_placeholders(r.set_medium, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name) as val_medium,
-    apply_placeholders(r.set_campaign, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name) as val_campaign,
-    apply_placeholders(r.set_content, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name) as val_content,
-    apply_placeholders(r.set_term, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name) as val_term,
-    apply_placeholders(r.set_strimix_refid, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name) as val_strimix_refid
+    apply_placeholders(r.set_source, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name, t.source, t.medium, t.campaign, t.content, t.term) as val_source,
+    apply_placeholders(r.set_medium, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name, t.source, t.medium, t.campaign, t.content, t.term) as val_medium,
+    apply_placeholders(r.set_campaign, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name, t.source, t.medium, t.campaign, t.content, t.term) as val_campaign,
+    apply_placeholders(r.set_content, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name, t.source, t.medium, t.campaign, t.content, t.term) as val_content,
+    apply_placeholders(r.set_term, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name, t.source, t.medium, t.campaign, t.content, t.term) as val_term,
+    apply_placeholders(r.set_strimix_refid, t.data_source, t.campaign_id, t.campaign_name, t.adgroup_id, t.adgroup_name, t.ad_id, t.ad_name, t.source, t.medium, t.campaign, t.content, t.term) as val_strimix_refid
   from `ad_costs_with_row_id` as t
   inner join utm_rules as r
   -- Условия по каноническим меткам проверяем на исходном состоянии строки
