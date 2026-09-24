@@ -417,12 +417,12 @@ export function validateTrafficRuleInput(item: ITrafficRuleInput): IDomainValida
   }
 
   if (item.applies_to_web === true) {
-    if (item.stage !== 'utm') {
+    if (item.stage !== 'utm' && item.stage !== 'origin' && item.stage !== 'channel') {
       errors.push(
         error(
           'applies_to_web',
           'APPLIES_TO_WEB_NOT_ALLOWED_FOR_STAGE',
-          'Applying a rule to web visits is only available for utm rules',
+          'Applying a rule to web visits is only available for utm, origin, and channel rules',
         ),
       )
     }

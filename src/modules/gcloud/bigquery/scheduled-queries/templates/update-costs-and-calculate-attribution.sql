@@ -1266,7 +1266,7 @@ create table if not exists `<project_name>.<dataset_name>.traffic_rules`
   is_system             bool   not null,
   stage                 string not null, -- 'utm' | 'origin' | 'channel'
   target                string not null, -- 'visit' | 'ad_cost' | 'both'
-  applies_to_web        bool,            -- только utm-стадия: применять правило и к веб-визитам (null = false)
+  applies_to_web        bool,            -- utm/origin/channel + visit/both: также к веб-визитам (null = false)
   source_regex          string,
   medium_regex          string,
   campaign_regex        string,
@@ -2572,6 +2572,12 @@ create temp table `visits_with_origin` as (
     on r.is_active = true
     and r.stage = 'origin'
     and r.target in ('visit', 'both')
+    -- Стадия origin всегда применяется к синтетическим визитам; к веб-визитам
+    -- применяется только правилами с applies_to_web=true.
+    and (
+      t.visit_type = 'synthetic'
+      or (t.visit_type = 'web' and ifnull(r.applies_to_web, false) = true)
+    )
     -- Условие channel-стадии на стадии origin не имеет смысла.
     and r.traffic_origin_regex is null
     and (r.source_regex is null or regexp_contains(ifnull(t.source, ''), r.source_regex))
@@ -2635,6 +2641,12 @@ partition by date options (require_partition_filter = false) as (
     on r.is_active = true
     and r.stage = 'channel'
     and r.target in ('visit', 'both')
+    -- Стадия channel всегда применяется к синтетическим визитам; к веб-визитам
+    -- применяется только правилами с applies_to_web=true.
+    and (
+      t.visit_type = 'synthetic'
+      or (t.visit_type = 'web' and ifnull(r.applies_to_web, false) = true)
+    )
     and (r.source_regex is null or regexp_contains(ifnull(t.source, ''), r.source_regex))
     and (r.medium_regex is null or regexp_contains(ifnull(t.medium, ''), r.medium_regex))
     and (r.campaign_regex is null or regexp_contains(ifnull(t.campaign, ''), r.campaign_regex))

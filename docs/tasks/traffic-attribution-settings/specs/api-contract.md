@@ -448,8 +448,8 @@ Invariants enforced by the CMS:
   classification outputs null;
 - `origin` requires `set_traffic_origin`, `channel` requires
   `set_traffic_channel`, and outputs of the other stage must be null;
-- `applies_to_web = true` is allowed only for `utm` with a target including
-  `visit`; `null` means false;
+- `applies_to_web = true` is allowed for `utm`, `origin`, and `channel` with a
+  target including `visit`; `null` means false;
 - `url_param_value_regex` requires a non-empty `url_param_key`; a key without a
   regex is an existence check;
 - ad conditions apply to a cost row or the unambiguous values of a synthetic

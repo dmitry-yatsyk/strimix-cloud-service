@@ -152,13 +152,24 @@ test('a condition on the resolved origin is only available to channel rules', ()
   )
 })
 
-test('applies_to_web is limited to utm rules whose target includes visits', () => {
-  assert.ok(
-    codes(
-      validateTrafficRuleInput(
-        ruleDraft({ stage: 'origin', set_traffic_origin: 'x', applies_to_web: true }),
-      ).errors,
-    ).includes('APPLIES_TO_WEB_NOT_ALLOWED_FOR_STAGE'),
+test('applies_to_web is allowed for utm, origin, and channel when target includes visits', () => {
+  assert.deepEqual(
+    validateTrafficRuleInput(
+      ruleDraft({ stage: 'utm', set_source: 'x', target: 'visit', applies_to_web: true }),
+    ).errors,
+    [],
+  )
+  assert.deepEqual(
+    validateTrafficRuleInput(
+      ruleDraft({ stage: 'origin', set_traffic_origin: 'x', applies_to_web: true }),
+    ).errors,
+    [],
+  )
+  assert.deepEqual(
+    validateTrafficRuleInput(
+      ruleDraft({ stage: 'channel', set_traffic_channel: 'x', applies_to_web: true }),
+    ).errors,
+    [],
   )
   assert.ok(
     codes(
@@ -166,6 +177,32 @@ test('applies_to_web is limited to utm rules whose target includes visits', () =
         ruleDraft({ stage: 'utm', set_source: 'x', target: 'ad_cost', applies_to_web: true }),
       ).errors,
     ).includes('APPLIES_TO_WEB_REQUIRES_VISIT_TARGET'),
+  )
+  assert.ok(
+    codes(
+      validateTrafficRuleInput(
+        ruleDraft({
+          stage: 'origin',
+          set_traffic_origin: 'x',
+          target: 'ad_cost',
+          applies_to_web: true,
+        }),
+      ).errors,
+    ).includes('APPLIES_TO_WEB_REQUIRES_VISIT_TARGET'),
+  )
+  // false and null stay allowed on every stage/target combination that is
+  // otherwise valid (ad_cost-only included).
+  assert.deepEqual(
+    validateTrafficRuleInput(
+      ruleDraft({ stage: 'origin', set_traffic_origin: 'x', target: 'ad_cost', applies_to_web: false }),
+    ).errors,
+    [],
+  )
+  assert.deepEqual(
+    validateTrafficRuleInput(
+      ruleDraft({ stage: 'channel', set_traffic_channel: 'x', applies_to_web: null }),
+    ).errors,
+    [],
   )
 })
 

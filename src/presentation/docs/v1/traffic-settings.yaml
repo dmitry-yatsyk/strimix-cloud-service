@@ -875,8 +875,8 @@ components:
           type: boolean
           nullable: true
           description: >-
-            Allowed only for a `utm` rule whose target includes visits. `null`
-            means false.
+            Allowed for a `utm`, `origin`, or `channel` rule whose target
+            includes visits. `null` means false.
         source_regex: { type: string, nullable: true, maxLength: 4096 }
         medium_regex: { type: string, nullable: true, maxLength: 4096 }
         campaign_regex: { type: string, nullable: true, maxLength: 4096 }
