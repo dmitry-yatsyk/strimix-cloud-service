@@ -3293,6 +3293,7 @@ select
 from orders_result t1
 left join `<project_name>.<dataset_name>.visits` t2
 on t1.last_marked_attr_visit = t2.visit_id
+and t2.visit_type = 'web'
 )
 """;
 
