@@ -20,6 +20,12 @@ export interface IProjectResources {
         traffic_rules: string | null
         attribution_signal_mappings: string | null
         excluded_url_params: string | null
+        /**
+         * Служебная таблица ревизий четырёх конфигурационных таблиц трафика
+         * и атрибуции. Создаётся контролируемым provisioning/миграцией;
+         * бизнес-схемы конфигурационных таблиц не меняет.
+         */
+        traffic_settings_revisions: string | null
       }
       scheduled_queries: {
         /**

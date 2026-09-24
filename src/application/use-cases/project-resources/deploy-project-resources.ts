@@ -31,6 +31,9 @@ import {
   EXCLUDED_URL_PARAMS_TABLE_ID,
   EXCLUDED_URL_PARAMS_TABLE_SCHEMA,
   buildExcludedUrlParamsSeedQuery,
+  TRAFFIC_SETTINGS_REVISIONS_TABLE_ID,
+  TRAFFIC_SETTINGS_REVISIONS_TABLE_SCHEMA,
+  buildTrafficSettingsRevisionsSeedQuery,
   UPDATE_COSTS_AND_CALCULATE_ATTRIBUTION_TEMPLATE,
   SCHEDULED_QUERY_CONFIGS,
   LEGACY_SCHEDULED_QUERY_DISPLAY_NAME_PREFIXES,
@@ -106,6 +109,7 @@ const deployProjectResources = async (projectId: number, resourceGroupId: string
               facebook_ads_ad_costs: null,
               google_ads_ad_costs: null,
               tiktok_ads_ad_costs: null,
+              traffic_settings_revisions: null,
             },
             scheduled_queries: {
               update_costs_and_calculate_attribution: null,
@@ -220,9 +224,10 @@ const deployProjectResources = async (projectId: number, resourceGroupId: string
     }
 
     // 9. Create BigQuery excluded referrers table (client-owned list of
-    // referrer hosts that must not count as referral traffic). Created empty:
-    // the future UI / SQL edits populate it. Existing projects that still have
-    // the legacy view keep it until a dedicated migration replaces it.
+    // referrer hosts that must not count as referral traffic), one row per host.
+    // Created empty: the traffic settings UI populates it. Projects deployed
+    // before this shape hold a view or a single row with an array of hosts and
+    // keep it until `migrate-traffic-settings` converts them.
     if (!bq.tables.excluded_referrers) {
       const tableId = EXCLUDED_REFERRERS_TABLE_ID
       const tableExists = await bigqueryApi.tableExists(bq.dataset.id, tableId)
@@ -234,7 +239,7 @@ const deployProjectResources = async (projectId: number, resourceGroupId: string
           tableId,
           schema: EXCLUDED_REFERRERS_TABLE_SCHEMA,
           description:
-            'Excluded referrer hosts. Client-owned; edited via SQL / UI. Attribution job unnests hosts when classifying referrals.',
+            'Excluded referrer hosts, one row per host. Client-owned; edited via the traffic settings UI. The attribution job reads the active rows when classifying referrals.',
         })
       }
 
@@ -321,6 +326,38 @@ const deployProjectResources = async (projectId: number, resourceGroupId: string
 
       bq.tables.excluded_url_params = fullTableId(tableId)
       await projectResources.save()
+    }
+
+    // 10.4 Create the traffic settings revisions table. It versions each of the
+    // four config collections so the settings UI can detect a concurrent edit
+    // instead of silently overwriting it. The seed is conditional on absence,
+    // so re-deploying a project neither duplicates a row — two rows for one
+    // resource make safe editing impossible — nor resets a revision that
+    // clients are already holding
+    {
+      const tableId = TRAFFIC_SETTINGS_REVISIONS_TABLE_ID
+      const tableExists = await bigqueryApi.tableExists(bq.dataset.id, tableId)
+      if (!tableExists) {
+        console.log('BigQuery traffic settings revisions table not found, creating table...')
+        await bigqueryApi.createTable({
+          projectId: gcpProjectId,
+          datasetId: bq.dataset.id,
+          tableId,
+          schema: TRAFFIC_SETTINGS_REVISIONS_TABLE_SCHEMA,
+          description:
+            'Per-collection revision of the traffic and attribution config tables. Bumped inside the same transaction as every settings write; never edited directly.',
+        })
+      }
+
+      console.log('Initialising missing traffic settings revision rows...')
+      await bigqueryApi.runQuery(
+        buildTrafficSettingsRevisionsSeedQuery(gcpProjectId, bq.dataset.id),
+      )
+
+      if (!bq.tables.traffic_settings_revisions) {
+        bq.tables.traffic_settings_revisions = fullTableId(tableId)
+        await projectResources.save()
+      }
     }
 
     // 11. Create PubSub API instance

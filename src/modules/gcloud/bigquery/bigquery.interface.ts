@@ -73,3 +73,51 @@ export interface IScheduledQueryInfo {
   configId: string
   displayName: string
 }
+
+/**
+ * Named query parameter values. `null` is allowed and REQUIRES an entry in
+ * `types`: BigQuery cannot infer the type of a null, and an empty array is
+ * bound as NULL, so its element type has to be declared as well.
+ */
+export type QueryParameterValues = Record<string, unknown>
+
+/**
+ * Explicit parameter types, in the shape the BigQuery client expects:
+ * `'STRING'`, `'INT64'`, `'BOOL'`, `['STRING']` for `ARRAY<STRING>`. Mirrors the
+ * SDK's recursive `QueryParamTypeStruct` so it can be passed straight through.
+ */
+export type QueryParameterTypes = {
+  [name: string]: string | string[] | QueryParameterTypes | QueryParameterTypes[]
+}
+
+export interface IParameterizedQueryParams {
+  query: string
+  params?: QueryParameterValues
+  types?: QueryParameterTypes
+  /** Overrides the instance location; must match the dataset location. */
+  location?: MultiRegionLocation
+  /** Validates the statement without executing it and without cost. */
+  dryRun?: boolean
+  labels?: Record<string, string>
+}
+
+export interface IQueryResult<TRow> {
+  rows: TRow[]
+  /**
+   * Rows changed by the statement. For a multi-statement script this is the
+   * total across its DML statements, so per-statement counts have to be
+   * asserted inside the script itself.
+   */
+  numDmlAffectedRows: number | null
+  jobId: string | null
+}
+
+export interface ITableMetadata {
+  tableId: string
+  type: 'TABLE' | 'VIEW' | 'EXTERNAL' | 'MATERIALIZED_VIEW' | 'SNAPSHOT' | 'UNKNOWN'
+  schema: TableField[]
+  numRows: number | null
+  /** SQL text of a view definition, present only for views. */
+  viewQuery: string | null
+  location: string | null
+}

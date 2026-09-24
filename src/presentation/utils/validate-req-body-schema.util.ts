@@ -19,6 +19,30 @@ const validateReqBodySchema = (schema: z.ZodObject<any, any>, body: any) => {
   }
 }
 
+/**
+ * Same validation and same error shape as validateReqBodySchema, but returns the
+ * parsed value instead of discarding it. Used where the schema also normalizes —
+ * for instance where an omitted optional field has to become an explicit null
+ * before it reaches the domain layer.
+ */
+const parseReqSchema = <TSchema extends z.ZodType>(
+  schema: TSchema,
+  payload: unknown,
+): z.output<TSchema> => {
+  try {
+    return schema.parse(payload)
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw new HttpException({
+        status: ERRORS.OTHER.REQUEST_VALIDATION_ERROR.status,
+        code: ERRORS.OTHER.REQUEST_VALIDATION_ERROR.code,
+        message: error.issues[0]?.message || 'Validation error',
+      })
+    }
+    throw new HttpException(ERRORS.OTHER.INTERNAL_SERVER_ERROR)
+  }
+}
+
 const requiredField = <T extends z.ZodTypeAny>(fieldName: string, schema: T) => {
   return z.preprocess((val) => {
     if (val === undefined) {
@@ -43,4 +67,4 @@ const objectIdStringSchema = <T extends z.ZodTypeAny>(fieldName: string, schema:
     })
 }
 
-export { validateReqBodySchema, requiredField, objectIdStringSchema }
+export { validateReqBodySchema, parseReqSchema, requiredField, objectIdStringSchema }

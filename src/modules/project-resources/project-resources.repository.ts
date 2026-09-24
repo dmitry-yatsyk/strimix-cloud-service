@@ -26,6 +26,7 @@ const ProjectResourcesSchema = new Schema(
           traffic_rules: { type: String, default: null },
           attribution_signal_mappings: { type: String, default: null },
           excluded_url_params: { type: String, default: null },
+          traffic_settings_revisions: { type: String, default: null },
         },
         scheduled_queries: {
           update_costs_and_calculate_attribution: { type: String, default: null },

@@ -1278,7 +1278,9 @@ create table if not exists `<project_name>.<dataset_name>.traffic_rules`
   set_term              string,
   set_strimix_refid     string,
   set_traffic_origin    string,
-  set_traffic_channel   string
+  set_traffic_channel   string,
+  name                  string,  -- коротка підпис для UI, джоба не читає
+  description           string   -- заметка оператора, джоба її не читає
 )""";
 
 set query = replace(query_template, '<project_name>', _project_name);
@@ -1286,12 +1288,15 @@ set query = replace(query, '<dataset_name>', _dataset_name);
 
 execute immediate (query);
 
--- Догоняющая миграция схемы: добавляем колонки applies_to_web и
--- data_source_regex в проекты, где traffic_rules создали до их появления.
+-- Догоняющая миграция схемы: добавляем колонки applies_to_web,
+-- data_source_regex, name и description в проекты, где traffic_rules создали
+-- до их появления. name и description — подписи для UI, расчёт их не читает.
 set query_template = """
 alter table `<project_name>.<dataset_name>.traffic_rules`
 add column if not exists applies_to_web bool,
-add column if not exists data_source_regex string""";
+add column if not exists data_source_regex string,
+add column if not exists name string,
+add column if not exists description string""";
 
 set query = replace(query_template, '<project_name>', _project_name);
 set query = replace(query, '<dataset_name>', _dataset_name);
@@ -1357,7 +1362,9 @@ create table if not exists `<project_name>.<dataset_name>.attribution_signal_map
   -- названиям от кросс-сетевых тёзок. Null значит «все сети».
   data_source_regex       string,
   event_name              string,          -- опционально: только события с этим именем
-  mode                    string not null  -- 'fallback' | 'override'
+  mode                    string not null, -- 'fallback' | 'override'
+  name                    string,          -- коротка підпис для UI, джоба не читає
+  description             string           -- заметка оператора, джоба её не читает
 )""";
 
 set query = replace(query_template, '<project_name>', _project_name);
@@ -1366,8 +1373,8 @@ set query = replace(query, '<dataset_name>', _dataset_name);
 execute immediate (query);
 
 -- Догоняющая миграция схемы: добавляем границы резолюции
--- (ad_destination_regex, data_source_regex) и фильтры срабатывания
--- match_*_regex в проекты, где таблица маппингов создана до появления
+-- (ad_destination_regex, data_source_regex), фильтры срабатывания
+-- match_*_regex и name в проекты, где таблица маппингов создана до появления
 -- этих полей.
 set query_template = """
 alter table `<project_name>.<dataset_name>.attribution_signal_mappings`
@@ -1384,7 +1391,9 @@ add column if not exists match_campaign_name_regex string,
 add column if not exists match_adgroup_id_regex string,
 add column if not exists match_adgroup_name_regex string,
 add column if not exists match_ad_id_regex string,
-add column if not exists match_ad_name_regex string""";
+add column if not exists match_ad_name_regex string,
+add column if not exists name string,
+add column if not exists description string""";
 
 set query = replace(query_template, '<project_name>', _project_name);
 set query = replace(query, '<dataset_name>', _dataset_name);
@@ -1475,7 +1484,7 @@ t2 as (
       else case 
         when page_referrer is not null 
         and page_referrer_host not like host 
-        and page_referrer_host not in (select host from `<project_name>.<dataset_name>.excluded_referrers`, unnest(hosts) as host)
+        and page_referrer_host not in (select host from `<project_name>.<dataset_name>.excluded_referrers` where is_active = true and host is not null)
         and medium is null
         then if(regexp_contains(page_referrer, r'^android-app:\\/\\/'), page_referrer, page_referrer_host)
       else case when medium is not null then '(not set)'
@@ -1485,7 +1494,7 @@ t2 as (
       else case 
         when page_referrer is not null 
         and page_referrer_host not like host 
-        and page_referrer_host not in (select host from `<project_name>.<dataset_name>.excluded_referrers`, unnest(hosts) as host)
+        and page_referrer_host not in (select host from `<project_name>.<dataset_name>.excluded_referrers` where is_active = true and host is not null)
         and source is null
         then 'referral'
       else case when source is not null then '(not set)'
@@ -1556,25 +1565,28 @@ begin
 
 declare query string;
 declare query_template string;
-declare excluded_url_params_regex string;
+declare excluded_url_param_patterns array<string>;
 
--- Собираем один якорный regex из конфиг-таблицы excluded_url_params: эти
--- трекинговые параметры затем вырезаются из нормализованного landing_page.
--- Одинарные кавычки удаляем из паттернов, потому что regex инлайнится в
--- текст запроса как сырой строковый литерал. Если активных строк в конфиге
--- нет, подставляем '$^' (ничего не матчит).
+-- Читаем активные паттерны конфиг-таблицы excluded_url_params как МАССИВ:
+-- эти трекинговые параметры затем вырезаются из нормализованного
+-- landing_page. Паттерны не склеиваются в один regex и не инлайнятся в текст
+-- запроса — ниже они передаются параметром через execute immediate ... using,
+-- поэтому кавычки и обратные слэши сохраняют смысл, а inline-флаг одного
+-- паттерна не меняет поведение соседнего. Пустой или пробельный паттерн
+-- пропускаем: он не описывает ключ, но матчил бы пустое имя. Пустой массив
+-- BigQuery связывает как NULL, unnest(NULL) не даёт строк — при отсутствии
+-- активных исключений не вырезается ничего.
 set query_template = """
-select ifnull(
-  concat('^(?i)(?:', string_agg(replace(param_key_regex, "'", ''), '|'), ')='),
-  '$^'
-)
+select ifnull(array_agg(param_key_regex order by param_id), [])
 from `<project_name>.<dataset_name>.excluded_url_params`
-where is_active = true""";
+where is_active = true
+and param_key_regex is not null
+and trim(param_key_regex) != ''""";
 
 set query = replace(query_template, '<project_name>', _project_name);
 set query = replace(query, '<dataset_name>', _dataset_name);
 
-execute immediate (query) into excluded_url_params_regex;
+execute immediate (query) into excluded_url_param_patterns;
 
 set query_template = """
 -- Staging-таблица визитов: живёт до конца прогона; пользовательскую
@@ -1734,6 +1746,12 @@ visits_table as (
     -- оставляем и сортируем по ключу, чтобы порядок параметров не дробил
     -- строки отчёта. Имя и нормализация совпадают с ad_costs.landing_page,
     -- поэтому в объединённых отчётах реклама и визиты режутся по одному ключу.
+    -- Исключение проверяется по ИМЕНИ параметра (всё до первого '='), каждый
+    -- активный паттерн — независимо и как полное совпадение без учёта
+    -- регистра: 'utm_[a-z]+' покрывает utm_source и UTM_MEDIUM, но не
+    -- custom_utm_source, а уже якоренный '^fbclid$' продолжает работать.
+    -- Токен без '=' (например '?flag') рассматривается как ключ 'flag'
+    -- одинаково здесь, в ветке ad_costs и в серверном preview.
     nullif(concat(
       regexp_replace(concat(
         regexp_replace(ifnull(lower(first_hostname), ''), '^www[.]', ''),
@@ -1744,7 +1762,14 @@ visits_table as (
         select concat('?', string_agg(kv, '&' order by kv))
         from unnest(split(regexp_extract(lower(first_page_url), '[?]([^#]*)'), '&')) as kv
         where kv != ''
-        and not regexp_contains(kv, r'<excluded_url_params_regex>')
+        and not exists (
+          select 1
+          from unnest(@excluded_url_param_patterns) as excluded_url_param_pattern
+          where regexp_contains(
+            regexp_extract(kv, r'^[^=]*'),
+            concat('(?i)^(?:', excluded_url_param_pattern, r')$')
+          )
+        )
       ), '')
     ), '') as landing_page,
     -- Визиты из событий браузера всегда имеют visit_type='web';
@@ -1777,9 +1802,9 @@ select * from visits_table)""";
 set query = replace(query_template, '<project_name>', _project_name);
 set query = replace(query, '<dataset_name>', _dataset_name);
 set query = replace(query, '<project_timezone>', _project_timezone);
-set query = replace(query, '<excluded_url_params_regex>', excluded_url_params_regex);
 
-execute immediate (query);
+-- Паттерны исключений передаём ПАРАМЕТРОМ, а не подстановкой в текст запроса.
+execute immediate (query) using excluded_url_param_patterns as excluded_url_param_patterns;
 
 end;
 
@@ -3490,25 +3515,24 @@ begin
 
 declare query string;
 declare query_template string;
-declare excluded_url_params_regex string;
+declare excluded_url_param_patterns array<string>;
 
--- Собираем один общий regex из конфиг-таблицы excluded_url_params: эти
+-- Читаем активные паттерны конфиг-таблицы excluded_url_params как МАССИВ: эти
 -- трекинговые query-параметры (gclid, fbclid, utm_* и т.п.) вырезаются при
--- нормализации landing_page. Одинарные кавычки из паттернов убираем,
--- потому что regex инлайнится в текст запроса сырой строкой. Паттерн '$^'
--- не матчит ничего: это фолбэк на случай, когда активных строк в конфиге нет.
+-- нормализации landing_page. Загрузка, фильтр и порядок совпадают с ветвью
+-- визитов; паттерны передаются параметром через execute immediate ... using,
+-- а не подстановкой в текст запроса.
 set query_template = """
-select ifnull(
-  concat('^(?i)(?:', string_agg(replace(param_key_regex, "'", ''), '|'), ')='),
-  '$^'
-)
+select ifnull(array_agg(param_key_regex order by param_id), [])
 from `<project_name>.<dataset_name>.excluded_url_params`
-where is_active = true""";
+where is_active = true
+and param_key_regex is not null
+and trim(param_key_regex) != ''""";
 
 set query = replace(query_template, '<project_name>', _project_name);
 set query = replace(query, '<dataset_name>', _dataset_name);
 
-execute immediate (query) into excluded_url_params_regex;
+execute immediate (query) into excluded_url_param_patterns;
 
 -- Гарантируем наличие колонок классификации на ad_costs (миграция
 -- проектов, созданных до этой функциональности; для новых проектов
@@ -3745,6 +3769,9 @@ partition by date options (require_partition_filter = false) as (
       -- и визиты по одному ключу и показывают «не считаемые» лендинги.
       -- Важно: ad_destination тут НЕ фолбэк. В нём лежат константы типа
       -- назначения (chat, web, lead_form), а не URL.
+      -- Исключение проверяется по ИМЕНИ параметра (всё до первого '='),
+      -- каждый активный паттерн независимо и как полное совпадение без учёта
+      -- регистра — та же семантика, что у визитов и у серверного preview.
       nullif(concat(
         regexp_replace(concat(
           regexp_replace(ifnull(regexp_extract(lower(a.landing_page_url), '^(?:[a-z]+://)?([^/?#]+)'), ''), '^www[.]', ''),
@@ -3755,7 +3782,14 @@ partition by date options (require_partition_filter = false) as (
           select concat('?', string_agg(kv, '&' order by kv))
           from unnest(split(regexp_extract(lower(a.landing_page_url), '[?]([^#]*)'), '&')) as kv
           where kv != ''
-          and not regexp_contains(kv, r'<excluded_url_params_regex>')
+          and not exists (
+            select 1
+            from unnest(@excluded_url_param_patterns) as excluded_url_param_pattern
+            where regexp_contains(
+              regexp_extract(kv, r'^[^=]*'),
+              concat('(?i)^(?:', excluded_url_param_pattern, r')$')
+            )
+          )
         ), '')
       ), '') as landing_page
     ),
@@ -3802,9 +3836,9 @@ partition by date options (require_partition_filter = false) as (
 
 set query = replace(query_template, '<project_name>', _project_name);
 set query = replace(query, '<dataset_name>', _dataset_name);
-set query = replace(query, '<excluded_url_params_regex>', excluded_url_params_regex);
 
-execute immediate (query);
+-- Паттерны исключений передаём ПАРАМЕТРОМ, а не подстановкой в текст запроса.
+execute immediate (query) using excluded_url_param_patterns as excluded_url_param_patterns;
 
 end;
 

@@ -1,0 +1,1178 @@
+paths:
+  /project-resources/{projectId}/traffic-settings/meta:
+    get:
+      tags:
+        - Traffic Settings
+      summary: Readiness and diagnostics of the four settings resources
+      description: >-
+        Reports, per resource, whether it can be read and written and why not.
+        Anything other than `ready` carries a stable `reason_code` and a safe
+        message. A not-ready resource is never reported as an existing empty
+        configuration, because that reads as "nothing is configured" and invites
+        the user to recreate settings that already exist. The API gateway adds
+        `can_read` / `can_write` to this response from the user's roles; this
+        service does not know them.
+      operationId: getTrafficSettingsMeta
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Readiness of every resource
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrafficSettingsMeta'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectResourcesNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /project-resources/{projectId}/traffic-settings/validate:
+    post:
+      tags:
+        - Traffic Settings
+      summary: Check a draft without writing anything
+      description: >-
+        Runs the same domain invariants and the same BigQuery RE2 compilation that
+        a write runs, and reports them per field. Passing is not a guarantee of a
+        successful save: the revision and the priority constraint are re-checked
+        inside the write transaction, which is the only place they are
+        enforceable. `id` supplies context only, is never used to change an id, and
+        is checked to belong to this project.
+      operationId: validateTrafficSetting
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resource, item]
+              additionalProperties: false
+              properties:
+                resource:
+                  type: string
+                  enum:
+                    - excluded-url-params
+                    - excluded-referrers
+                    - traffic-rules
+                    - attribution-signal-mappings
+                item:
+                  type: object
+                  description: >-
+                    The draft, kept deliberately loose: a structurally broken draft
+                    must come back as field errors, not as a rejected request.
+                id:
+                  type: string
+                  nullable: true
+                  example: custom_2f1c1c9e-6f4a-4c2e-9b3a-1a2b3c4d5e6f
+      responses:
+        '200':
+          description: Validation report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+        '400':
+          $ref: '#/components/responses/RequestValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/NotReady'
+
+  /project-resources/{projectId}/traffic-settings/excluded-url-params/preview:
+    post:
+      tags:
+        - Traffic Settings
+      summary: Effect of one draft exclusion on one URL
+      description: >-
+        Shows what the single exclusion being edited would do, not what the whole
+        project configuration does. It uses the same SQL fragments as the
+        attribution job, reads no stored rows and no events, and never issues a
+        request to the address. The result is a normalized `landing_page` — no
+        protocol, no `www.`, no trailing slash, folded case, remaining parameters
+        sorted — so callers must label it as such rather than as "your URL".
+        With `is_active: false` nothing is removed but normalization still runs.
+      operationId: previewExcludedUrlParam
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, item]
+              additionalProperties: false
+              properties:
+                url:
+                  type: string
+                  example: https://shop.example/chairs?utm_source=meta&category=garden
+                item:
+                  $ref: '#/components/schemas/ExcludedUrlParamInput'
+      responses:
+        '200':
+          description: Preview result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UrlPreviewResult'
+        '400':
+          $ref: '#/components/responses/DomainValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/NotReady'
+
+  /project-resources/{projectId}/traffic-settings/excluded-referrers/bulk:
+    post:
+      tags:
+        - Traffic Settings
+      summary: Add several referrer hosts at once
+      description: >-
+        The one referrer-specific operation. Reading, editing, toggling and deleting
+        referrers use the generic `{resource}` routes, because each host is its own
+        row addressed by `referrer_id`; this endpoint exists because own domains
+        normally arrive as a pasted set.
+
+
+        Hosts already on the list are skipped rather than rejected and come back in
+        `skipped_hosts`, so a partly overlapping paste succeeds and the client can
+        still report what it did not add. Normalization — trim, lower case, IDN to
+        ASCII punycode, one trailing dot dropped, de-duplicate, length checks — is
+        applied here and the normalized hosts are what get stored. Added rows are
+        active.
+      operationId: addExcludedReferrers
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_revision, hosts]
+              additionalProperties: false
+              properties:
+                expected_revision:
+                  $ref: '#/components/schemas/Revision'
+                hosts:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items:
+                    type: string
+                  example: ['example.com', 'www.example.com']
+      responses:
+        '201':
+          description: The rows that were added, and the hosts that were already listed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, skipped_hosts, revision, application]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ExcludedReferrer'
+                  skipped_hosts:
+                    type: array
+                    items:
+                      type: string
+                    description: Hosts that were already on the list, active or not
+                  revision:
+                    $ref: '#/components/schemas/Revision'
+                  application:
+                    $ref: '#/components/schemas/ApplicationInfo'
+        '400':
+          $ref: '#/components/responses/DomainValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/RevisionConflict'
+        '504':
+          $ref: '#/components/responses/OutcomeUnknown'
+
+
+  /project-resources/{projectId}/traffic-settings/attribution-job/status:
+    get:
+      tags:
+        - Traffic Settings
+      summary: Live status of the attribution scheduled query
+      description: >-
+        Asks Google Cloud Data Transfer for the project's attribution scheduled
+        query: whether a PENDING/RUNNING transfer run exists, the timestamp of
+        the most recent run, and a health `status` chip value (ACTIVE | PAUSED |
+        ERROR) derived from TransferConfig.disabled / scheduleOptions.disableAutoScheduling
+        and TransferConfig.state / latest TransferRun.state (FAILED → ERROR).
+        Status is never stored in Mongo. The transfer config name is read from
+        `project_resources.gcloud.bigquery.scheduled_queries.update_costs_and_calculate_attribution`.
+        When the scheduled query (or project resources) is missing, returns a soft
+        not-configured payload (`configured: false`, `running: false`,
+        `last_run_at: null`) — never creates a transfer config or
+        project_resources document.
+      operationId: getAttributionJobStatus
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: >-
+            Current run + health status (`configured: false` when the scheduled
+            query is missing)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttributionJobStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /project-resources/{projectId}/traffic-settings/attribution-job/run:
+    post:
+      tags:
+        - Traffic Settings
+      summary: Start a manual run of the attribution scheduled query
+      description: >-
+        Starts one manual transfer run via BigQuery Data Transfer
+        `startManualTransferRuns` against the stored scheduled-query transfer
+        config. Refuses with ATTRIBUTION_JOB_NOT_CONFIGURED when the scheduled
+        query is missing (never creates one). Refuses a second start while a
+        PENDING or RUNNING run already exists. No request body. No Mongo
+        job-status table.
+      operationId: runAttributionJob
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '202':
+          description: Manual run accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttributionJobRunResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProjectResourcesNotFound'
+        '409':
+          description: Not configured, or a run is already in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /project-resources/{projectId}/traffic-settings/{resource}:
+    get:
+      tags:
+        - Traffic Settings
+      summary: Whole collection of one resource
+      description: >-
+        Returns every row plus the collection revision from one consistent
+        snapshot. There is no pagination: these collections are bounded by the
+        application limits and search, filter and sort are done by the client, so a
+        partial page would only create the chance to act on an incomplete picture.
+      operationId: getTrafficSettingsCollection
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ItemResource'
+      responses:
+        '200':
+          description: The collection and its revision
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, revision]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TrafficSettingsItem'
+                  revision:
+                    $ref: '#/components/schemas/Revision'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/NotReady'
+
+    post:
+      tags:
+        - Traffic Settings
+      summary: Create one row
+      description: >-
+        The server owns identity: the id is generated as `custom_<uuid>` and
+        `is_system` is always false for anything created through the API. The
+        response is the stored row re-read from BigQuery, never an echo of the
+        request.
+      operationId: createTrafficSetting
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ItemResource'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_revision, item]
+              additionalProperties: false
+              properties:
+                expected_revision:
+                  $ref: '#/components/schemas/Revision'
+                item:
+                  $ref: '#/components/schemas/TrafficSettingsItemInput'
+      responses:
+        '201':
+          description: The created row
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
+        '400':
+          $ref: '#/components/responses/DomainValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/RevisionConflict'
+        '504':
+          $ref: '#/components/responses/OutcomeUnknown'
+
+  /project-resources/{projectId}/traffic-settings/{resource}/{id}:
+    get:
+      tags:
+        - Traffic Settings
+      summary: One row plus the revision of its collection
+      description: >-
+        The revision belongs to the whole collection, not the row: a mutation is
+        guarded by it, so the item alone would not be enough to save the row back.
+      operationId: getTrafficSetting
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ItemResource'
+        - $ref: '#/components/parameters/ItemId'
+      responses:
+        '200':
+          description: The row and the collection revision
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [item, revision]
+                properties:
+                  item:
+                    $ref: '#/components/schemas/TrafficSettingsItem'
+                  revision:
+                    $ref: '#/components/schemas/Revision'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/NotReady'
+
+    put:
+      tags:
+        - Traffic Settings
+      summary: Full replacement of the mutable fields
+      description: >-
+        The body must carry ALL mutable fields, including explicit nulls. An
+        omitted optional field is stored as NULL, not left unchanged: "leave
+        unchanged" cannot be expressed without knowing which fields the client
+        actually displayed, and a client running an older form would otherwise
+        silently preserve fields it never showed. Read-only fields are rejected,
+        and so is any unknown key.
+      operationId: replaceTrafficSetting
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ItemResource'
+        - $ref: '#/components/parameters/ItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_revision, item]
+              additionalProperties: false
+              properties:
+                expected_revision:
+                  $ref: '#/components/schemas/Revision'
+                item:
+                  $ref: '#/components/schemas/TrafficSettingsItemInput'
+      responses:
+        '200':
+          description: The stored row after the write
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
+        '400':
+          $ref: '#/components/responses/DomainValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RevisionConflict'
+        '504':
+          $ref: '#/components/responses/OutcomeUnknown'
+
+    delete:
+      tags:
+        - Traffic Settings
+      summary: Delete one row
+      description: >-
+        DELETE carries a body, because the revision guard applies to it like any
+        other write. Deleting a system row is allowed and permanent: seeds are
+        inserted once at provisioning and neither this service nor the attribution
+        job ever re-inserts them.
+      operationId: deleteTrafficSetting
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ItemResource'
+        - $ref: '#/components/parameters/ItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_revision]
+              additionalProperties: false
+              properties:
+                expected_revision:
+                  $ref: '#/components/schemas/Revision'
+      responses:
+        '200':
+          description: The deleted id and the new revision
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted_id, revision, application]
+                properties:
+                  deleted_id:
+                    type: string
+                  revision:
+                    $ref: '#/components/schemas/Revision'
+                  application:
+                    $ref: '#/components/schemas/ApplicationInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RevisionConflict'
+        '504':
+          $ref: '#/components/responses/OutcomeUnknown'
+
+  /project-resources/{projectId}/traffic-settings/{resource}/{id}/active:
+    patch:
+      tags:
+        - Traffic Settings
+      summary: Toggle is_active only
+      description: >-
+        Deliberately separate from the full replace, so a toggle in a list cannot
+        blank the fields the list does not display — which is exactly what a PUT
+        built from a table row would do. Enabling a traffic rule can create a
+        priority conflict and is checked for it; disabling can only remove
+        conflicts and is therefore always allowed, which is what makes a legacy
+        conflicting configuration repairable.
+      operationId: setTrafficSettingActive
+      security:
+        - apiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/ItemResource'
+        - $ref: '#/components/parameters/ItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_revision, is_active]
+              additionalProperties: false
+              properties:
+                expected_revision:
+                  $ref: '#/components/schemas/Revision'
+                is_active:
+                  type: boolean
+      responses:
+        '200':
+          description: The stored row after the write
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RevisionConflict'
+        '504':
+          $ref: '#/components/responses/OutcomeUnknown'
+
+components:
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      description: Strimix project identifier, already authorized by the API gateway
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        example: 123
+
+    ItemResource:
+      name: resource
+      in: path
+      required: true
+      description: >-
+        One of the four id-addressed resources. Referrers additionally accept a
+        bulk add through their own literal route.
+      schema:
+        type: string
+        enum:
+          - excluded-url-params
+          - excluded-referrers
+          - traffic-rules
+          - attribution-signal-mappings
+
+    ItemId:
+      name: id
+      in: path
+      required: true
+      description: Immutable row identifier, `custom_<uuid>` or a `sys_` seed id
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]+$'
+        example: custom_2f1c1c9e-6f4a-4c2e-9b3a-1a2b3c4d5e6f
+
+  schemas:
+    Revision:
+      type: string
+      pattern: '^\d+$'
+      description: >-
+        Opaque decimal string versioning the WHOLE collection of one resource
+        inside one project. It is not a timestamp and not a row version. It is
+        returned from the same snapshot as the data it describes, and every
+        mutation must carry it as `expected_revision`. `"0"` means the resource has
+        no revision row yet; no write will ever accept it.
+      example: '12'
+
+    ApplicationInfo:
+      type: object
+      required: [mode]
+      description: >-
+        How a saved change reaches reports. There is no `applied_at` and no
+        `next_run_at`: this service does not know when a given project's
+        attribution job runs next, and inventing a time would be a promise it
+        cannot keep.
+      properties:
+        mode:
+          type: string
+          enum: [next_scheduled_run]
+        scheduled_query_configured:
+          type: boolean
+
+    ResourceReadiness:
+      type: object
+      required: [readable, writable, state]
+      properties:
+        readable:
+          type: boolean
+        writable:
+          type: boolean
+        state:
+          type: string
+          enum: [ready, not_provisioned, migration_required, invalid_configuration]
+        reason_code:
+          type: string
+          description: >-
+            Present whenever state is not `ready`. Note that
+            `INVALID_STORED_REGEX` and `PRIORITY_CONFLICTS` keep `writable: true`
+            on purpose: those states are repaired through this very API, so
+            blocking writes would make the configuration permanently unfixable.
+          enum:
+            - TABLE_MISSING
+            - DATASET_MISSING
+            - LEGACY_VIEW
+            - LEGACY_HOSTS_COLUMN
+            - REVISION_ROW_MISSING
+            - REVISION_ROWS_DUPLICATED
+            - SCHEMA_COLUMNS_MISSING
+            - DUPLICATE_ITEM_IDS
+            - RESOURCE_MISREGISTERED
+            - INVALID_STORED_REGEX
+            - PRIORITY_CONFLICTS
+        message:
+          type: string
+          description: Safe operator-facing explanation. Never carries SQL or GCP identifiers.
+
+    AttributionJobStatus:
+      type: object
+      required: [project_id, running, last_run_at, status, configured]
+      additionalProperties: false
+      properties:
+        project_id:
+          type: integer
+          example: 1350
+        running:
+          type: boolean
+          description: True when Google reports a PENDING or RUNNING transfer run
+          example: false
+        last_run_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            ISO-8601 timestamp of the most recent transfer run (newest by start
+            time). Prefers end time when that run SUCCEEDED; otherwise start
+            time. Null when there are no runs or the scheduled query is not
+            configured.
+          example: '2026-09-24T01:55:00.000Z'
+        status:
+          type: string
+          enum: [ACTIVE, PAUSED, ERROR]
+          description: >-
+            Health chip (same enum as identification jobs). PAUSED when the
+            transfer config is disabled or auto-scheduling is off; ERROR when
+            TransferConfig.state or the latest TransferRun.state is FAILED;
+            otherwise ACTIVE. A PENDING/RUNNING run stays ACTIVE health —
+            `running` covers in-progress.
+          example: ACTIVE
+        configured:
+          type: boolean
+          description: >-
+            False when the scheduled query (or project resources) is missing.
+            GET returns this soft not-configured view without creating anything;
+            POST run still returns 409.
+          example: true
+    AttributionJobRunResult:
+      allOf:
+        - $ref: '#/components/schemas/AttributionJobStatus'
+        - type: object
+          required: [started]
+          additionalProperties: false
+          properties:
+            started:
+              type: boolean
+              description: True when this call started a new run
+              example: true
+    TrafficSettingsMeta:
+      type: object
+      required: [project_id, application, resources]
+      properties:
+        project_id:
+          type: integer
+        application:
+          $ref: '#/components/schemas/ApplicationInfo'
+        resources:
+          type: object
+          required:
+            - excluded-url-params
+            - excluded-referrers
+            - traffic-rules
+            - attribution-signal-mappings
+          properties:
+            excluded-url-params:
+              $ref: '#/components/schemas/ResourceReadiness'
+            excluded-referrers:
+              $ref: '#/components/schemas/ResourceReadiness'
+            traffic-rules:
+              $ref: '#/components/schemas/ResourceReadiness'
+            attribution-signal-mappings:
+              $ref: '#/components/schemas/ResourceReadiness'
+
+    ValidationIssue:
+      type: object
+      required: [field, code, message]
+      properties:
+        field:
+          type: string
+          description: A domain field name, or a readable path such as `hosts[2]`
+        code:
+          type: string
+        message:
+          type: string
+
+    ValidationResult:
+      type: object
+      required: [valid, errors, warnings]
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationIssue'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationIssue'
+
+    UrlPreviewResult:
+      type: object
+      required: [normalized_landing_page, excluded_keys, retained_keys, warnings]
+      properties:
+        normalized_landing_page:
+          type: string
+          nullable: true
+          example: shop.example/chairs?category=garden
+        excluded_keys:
+          type: array
+          items:
+            type: string
+        retained_keys:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationIssue'
+
+    ExcludedReferrerInput:
+      type: object
+      required: [host, is_active]
+      additionalProperties: false
+      description: >-
+        One excluded referrer host. The host is stored normalized — trimmed, lower
+        case, IDN as ASCII punycode, one trailing dot dropped — and must be unique
+        across the list regardless of `is_active`: a duplicate is rejected with
+        `TRAFFIC_SETTINGS_REFERRER_HOST_CONFLICT`. Enter the hostname only, without
+        a scheme, port, path or query.
+      properties:
+        host:
+          type: string
+          maxLength: 253
+          example: www.example.com
+        is_active:
+          type: boolean
+          description: An inactive row is kept for the operator but excludes nothing
+        description:
+          type: string
+          nullable: true
+          maxLength: 4096
+
+    ExcludedReferrer:
+      allOf:
+        - type: object
+          required: [referrer_id]
+          properties:
+            referrer_id:
+              type: string
+              readOnly: true
+              example: custom_2f1c1c9e-6f4a-4c2e-9b3a-1a2b3c4d5e6f
+        - $ref: '#/components/schemas/ExcludedReferrerInput'
+
+    MutationResult:
+      type: object
+      required: [item, revision, application]
+      properties:
+        item:
+          $ref: '#/components/schemas/TrafficSettingsItem'
+        revision:
+          $ref: '#/components/schemas/Revision'
+        application:
+          $ref: '#/components/schemas/ApplicationInfo'
+
+    ExcludedUrlParamInput:
+      type: object
+      required: [param_key_regex, is_active]
+      additionalProperties: false
+      description: >-
+        `param_key_regex` is matched against the WHOLE URL parameter key,
+        case-insensitively — not against the value and not against an arbitrary
+        substring of the URL. `utm_[a-z]+` covers `utm_source` and `UTM_MEDIUM` but
+        not `custom_utm_source`, and an already anchored `^fbclid$` works. Only the
+        normalized `landing_page` of visits and ad_costs is affected; the original
+        URL, the extracted UTMs, `url_params` and the ad identifier columns are
+        untouched.
+      properties:
+        param_key_regex:
+          type: string
+          maxLength: 4096
+          example: utm_[a-z]+
+        is_active:
+          type: boolean
+        description:
+          type: string
+          nullable: true
+          maxLength: 4096
+
+    ExcludedUrlParam:
+      allOf:
+        - type: object
+          required: [param_id, is_system]
+          properties:
+            param_id:
+              type: string
+            is_system:
+              type: boolean
+              description: >-
+                Origin only. System rows are still editable, disableable and
+                deletable; the flag exists so the UI can label them.
+        - $ref: '#/components/schemas/ExcludedUrlParamInput'
+
+    TrafficRuleInput:
+      type: object
+      required: [priority, is_active, stage, target]
+      additionalProperties: false
+      description: >-
+        All non-null conditions are ANDed; there are no arbitrary OR groups, though
+        alternation inside one regex is fine. Regex conditions are case-sensitive
+        as written — `(?i)` is the author's job. A LOWER priority runs earlier. For
+        the utm stage, each `set_*` output is taken from the first matching rule BY
+        PRIORITY THAT DEFINES THAT FIELD, so different rules may fill different
+        fields; for origin and channel the first matching rule wins outright. Ad
+        conditions apply to a cost row or to the unambiguous values of a synthetic
+        visit's resolved group — they never match web visits, even with
+        `applies_to_web` enabled.
+      properties:
+        priority:
+          type: integer
+          description: Lower runs earlier. Must be a whole number that survives a JSON round trip.
+        is_active:
+          type: boolean
+        stage:
+          type: string
+          enum: [utm, origin, channel]
+        target:
+          type: string
+          enum: [visit, ad_cost, both]
+        applies_to_web:
+          type: boolean
+          nullable: true
+          description: >-
+            Allowed only for a `utm` rule whose target includes visits. `null`
+            means false.
+        source_regex: { type: string, nullable: true, maxLength: 4096 }
+        medium_regex: { type: string, nullable: true, maxLength: 4096 }
+        campaign_regex: { type: string, nullable: true, maxLength: 4096 }
+        content_regex: { type: string, nullable: true, maxLength: 4096 }
+        term_regex: { type: string, nullable: true, maxLength: 4096 }
+        strimix_refid_regex: { type: string, nullable: true, maxLength: 4096 }
+        data_source_regex: { type: string, nullable: true, maxLength: 4096 }
+        campaign_id_regex: { type: string, nullable: true, maxLength: 4096 }
+        campaign_name_regex: { type: string, nullable: true, maxLength: 4096 }
+        adgroup_id_regex: { type: string, nullable: true, maxLength: 4096 }
+        adgroup_name_regex: { type: string, nullable: true, maxLength: 4096 }
+        ad_id_regex: { type: string, nullable: true, maxLength: 4096 }
+        ad_name_regex: { type: string, nullable: true, maxLength: 4096 }
+        ad_destination_regex: { type: string, nullable: true, maxLength: 4096 }
+        url_param_key:
+          type: string
+          nullable: true
+          maxLength: 256
+          description: A key on its own is an existence check.
+        url_param_value_regex:
+          type: string
+          nullable: true
+          maxLength: 4096
+          description: Requires a non-empty `url_param_key`.
+        traffic_origin_regex:
+          type: string
+          nullable: true
+          maxLength: 4096
+          description: >-
+            Reads a value that only exists after the origin stage has run, so it is
+            allowed on channel rules only.
+        set_source: { type: string, nullable: true, maxLength: 2048 }
+        set_medium: { type: string, nullable: true, maxLength: 2048 }
+        set_campaign: { type: string, nullable: true, maxLength: 2048 }
+        set_content: { type: string, nullable: true, maxLength: 2048 }
+        set_term: { type: string, nullable: true, maxLength: 2048 }
+        set_strimix_refid:
+          type: string
+          nullable: true
+          maxLength: 2048
+          description: >-
+            Label outputs may use these placeholders and nothing else, with no
+            expression evaluation: `{data_source}`, `{campaign_id}`,
+            `{campaign_name}`, `{adgroup_id}`, `{adgroup_name}`, `{ad_id}`,
+            `{ad_name}`. A rule using placeholders fires only when all five
+            canonical labels are still empty.
+        set_traffic_origin:
+          type: string
+          nullable: true
+          maxLength: 2048
+          description: Required by an `origin` rule, forbidden elsewhere.
+        set_traffic_channel:
+          type: string
+          nullable: true
+          maxLength: 2048
+          description: Required by a `channel` rule, forbidden elsewhere.
+        name:
+          type: string
+          nullable: true
+          maxLength: 4096
+          description: >
+            Short display label for the UI. Optional for custom rules. System seeds
+            carry a short English name. The attribution job does not read it.
+        description:
+          type: string
+          nullable: true
+          maxLength: 4096
+          description: Operator note. The attribution job does not read it.
+
+    TrafficRule:
+      allOf:
+        - type: object
+          required: [rule_id, is_system]
+          properties:
+            rule_id:
+              type: string
+            is_system:
+              type: boolean
+        - $ref: '#/components/schemas/TrafficRuleInput'
+
+    AttributionSignalMappingInput:
+      type: object
+      required: [priority, is_active, entity, param_source, mode]
+      additionalProperties: false
+      description: >-
+        `*_param_key` is the name of an INPUT key, not a value and not a JSONPath.
+        `null` means "do not extract"; there is no fallback to a standard default
+        key, and a synthetic visit is created only when something non-empty was
+        actually extracted. `match_*` filters are checked AFTER extraction, are
+        ANDed, and a missing extracted value fails its filter — which is why a
+        filter without its matching `*_param_key` is rejected.
+      properties:
+        priority:
+          type: integer
+          description: >-
+            Played out only among mappings that passed their filters for one
+            `(entity, entity_id)`. Equal priorities are currently broken by
+            `mapping_id`; that is surfaced as a warning, with no new prohibition and
+            no change to the tie-break.
+        is_active:
+          type: boolean
+        entity:
+          type: string
+          enum: [order, deal, event]
+        param_source:
+          type: string
+          enum: [custom_params, event_params]
+          description: >-
+            A consequence of the entity, not an independent choice: order and deal
+            read `custom_params`, event reads `event_params`. Other combinations are
+            rejected.
+        mode:
+          type: string
+          enum: [fallback, override]
+          description: >-
+            `fallback` creates a synthetic visit only when the profile has no marked
+            web attribution before the anchor time — NOT "only when no web visit
+            exists at all". `override` creates one regardless.
+        source_param_key: { type: string, nullable: true, maxLength: 256 }
+        medium_param_key: { type: string, nullable: true, maxLength: 256 }
+        campaign_param_key: { type: string, nullable: true, maxLength: 256 }
+        content_param_key: { type: string, nullable: true, maxLength: 256 }
+        term_param_key: { type: string, nullable: true, maxLength: 256 }
+        strimix_refid_param_key: { type: string, nullable: true, maxLength: 256 }
+        campaign_id_param_key: { type: string, nullable: true, maxLength: 256 }
+        campaign_name_param_key: { type: string, nullable: true, maxLength: 256 }
+        adgroup_id_param_key: { type: string, nullable: true, maxLength: 256 }
+        adgroup_name_param_key: { type: string, nullable: true, maxLength: 256 }
+        ad_id_param_key: { type: string, nullable: true, maxLength: 256 }
+        ad_name_param_key: { type: string, nullable: true, maxLength: 256 }
+        match_source_regex: { type: string, nullable: true, maxLength: 4096 }
+        match_medium_regex: { type: string, nullable: true, maxLength: 4096 }
+        match_campaign_regex: { type: string, nullable: true, maxLength: 4096 }
+        match_content_regex: { type: string, nullable: true, maxLength: 4096 }
+        match_term_regex: { type: string, nullable: true, maxLength: 4096 }
+        match_strimix_refid_regex: { type: string, nullable: true, maxLength: 4096 }
+        match_campaign_id_regex: { type: string, nullable: true, maxLength: 4096 }
+        match_campaign_name_regex: { type: string, nullable: true, maxLength: 4096 }
+        match_adgroup_id_regex: { type: string, nullable: true, maxLength: 4096 }
+        match_adgroup_name_regex: { type: string, nullable: true, maxLength: 4096 }
+        match_ad_id_regex: { type: string, nullable: true, maxLength: 4096 }
+        match_ad_name_regex: { type: string, nullable: true, maxLength: 4096 }
+        data_source_regex:
+          type: string
+          nullable: true
+          maxLength: 4096
+          description: >-
+            A resolution boundary scoping the ad_costs lookup, not a `match_*`
+            filter. Matched case-insensitively by the existing SQL, whereas
+            `match_*` are case-sensitive unless the author added `(?i)`.
+        ad_destination_regex:
+          type: string
+          nullable: true
+          maxLength: 4096
+          description: Resolution boundary, as above.
+        event_name:
+          type: string
+          nullable: true
+          maxLength: 256
+          description: Optional exact event name, meaningful for the event entity only.
+        name:
+          type: string
+          nullable: true
+          maxLength: 4096
+          description: >
+            Short display label for the UI. Optional. The attribution job does not
+            read it.
+        description:
+          type: string
+          nullable: true
+          maxLength: 4096
+          description: Operator note. The attribution job does not read it.
+
+    AttributionSignalMapping:
+      allOf:
+        - type: object
+          required: [mapping_id]
+          properties:
+            mapping_id:
+              type: string
+        - $ref: '#/components/schemas/AttributionSignalMappingInput'
+
+    TrafficSettingsItem:
+      oneOf:
+        - $ref: '#/components/schemas/ExcludedUrlParam'
+        - $ref: '#/components/schemas/ExcludedReferrer'
+        - $ref: '#/components/schemas/TrafficRule'
+        - $ref: '#/components/schemas/AttributionSignalMapping'
+
+    TrafficSettingsItemInput:
+      oneOf:
+        - $ref: '#/components/schemas/ExcludedUrlParamInput'
+        - $ref: '#/components/schemas/ExcludedReferrerInput'
+        - $ref: '#/components/schemas/TrafficRuleInput'
+        - $ref: '#/components/schemas/AttributionSignalMappingInput'
+
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [status, code, message]
+          properties:
+            status:
+              type: integer
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+              nullable: true
+              description: >-
+                Only what the client needs to resolve the situation. Never SQL,
+                dataset identifiers, service accounts or stack traces.
+
+  responses:
+    Unauthorized:
+      description: >-
+        Missing service code, or a code that does not belong to the API gateway.
+        These routes accept the gateway only, because it is the caller that has
+        already verified the user's permissions.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    RequestValidationError:
+      description: 'REQUEST_VALIDATION_ERROR: the envelope is structurally wrong'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    DomainValidationFailed:
+      description: >-
+        `TRAFFIC_SETTINGS_VALIDATION_FAILED` with per-field problems in
+        `details.errors`, or `TRAFFIC_SETTINGS_EXPECTED_REVISION_REQUIRED`. Nothing
+        was written and the client keeps its draft.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    NotFound:
+      description: 'TRAFFIC_SETTING_NOT_FOUND: the row is gone'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    ProjectResourcesNotFound:
+      description: 'TRAFFIC_SETTINGS_PROJECT_RESOURCES_NOT_FOUND: the project is not registered here'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    NotReady:
+      description: >-
+        `TRAFFIC_SETTINGS_NOT_PROVISIONED`, `TRAFFIC_SETTINGS_MIGRATION_REQUIRED`,
+        `TRAFFIC_SETTINGS_INVALID_CONFIGURATION` or
+        `TRAFFIC_SETTINGS_DUPLICATE_ITEM_ID`, with `details.reason_code`. Returned
+        instead of a misleading empty collection.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    RevisionConflict:
+      description: >-
+        `TRAFFIC_SETTINGS_REVISION_CONFLICT` with `details.current_revision`, or
+        `TRAFFIC_RULE_PRIORITY_CONFLICT` with `details.conflicting_rule_ids`, or one
+        of the not-ready codes re-checked on the write path. Nothing was written.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    OutcomeUnknown:
+      description: >-
+        `TRAFFIC_SETTINGS_OUTCOME_UNKNOWN`. The BigQuery statement may have
+        committed after this service stopped waiting, so the write is neither
+        confirmed nor denied. It is never retried automatically; the client keeps
+        its draft, re-reads the data, and any explicit retry must reuse the ORIGINAL
+        expected revision so a succeeded-but-unreported write cannot produce a
+        second row.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'

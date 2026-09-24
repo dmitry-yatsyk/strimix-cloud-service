@@ -8,7 +8,10 @@
     "copy-sql": "mkdir -p build/modules/gcloud/bigquery/scheduled-queries/templates && cp src/modules/gcloud/bigquery/scheduled-queries/templates/*.sql build/modules/gcloud/bigquery/scheduled-queries/templates/",
     "start": "npm run build && node build/index.js",
     "lint": "npx eslint ./src",
-    "format": "npx eslint ./src --fix"
+    "format": "npx eslint ./src --fix",
+    "test": "npx tsx --test \"src/**/*.test.ts\"",
+    "migrate:traffic-settings": "npx tsx src/scripts/migrate-traffic-settings.ts",
+    "dryrun:traffic-settings": "npx tsx src/scripts/dryrun-traffic-settings.ts"
   },
   "author": "",
   "license": "ISC",

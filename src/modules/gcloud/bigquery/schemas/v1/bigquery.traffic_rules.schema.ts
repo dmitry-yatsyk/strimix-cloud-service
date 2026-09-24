@@ -106,7 +106,120 @@ export const TRAFFIC_RULES_TABLE_SCHEMA = [
   // 'origin' / 'channel' stage rules fill the classification columns
   { name: 'set_traffic_origin', type: 'STRING' },
   { name: 'set_traffic_channel', type: 'STRING' },
+  // Short display label for the UI. Optional for custom rules; system seeds
+  // always carry one. The attribution job never reads it.
+  { name: 'name', type: 'STRING' },
+  // Operator note. The attribution job never reads it.
+  { name: 'description', type: 'STRING' },
 ]
+
+/**
+ * Short English display names for system seed rules. Shared by the deploy
+ * seed and the traffic-settings migration backfill so every provisioned
+ * project shows the same labels.
+ */
+export const SYSTEM_TRAFFIC_RULE_NAMES: Readonly<Record<string, string>> = {
+  sys_utm_projection_ad_costs: 'UTM projection to ad costs',
+  sys_utm_projection_visits: 'UTM projection to visits',
+  sys_origin_google_ads: 'Google Ads',
+  sys_origin_bing_ads: 'Bing Ads',
+  sys_origin_meta_ads: 'Meta Ads',
+  sys_origin_tiktok_ads: 'TikTok Ads',
+  sys_origin_linkedin_ads: 'LinkedIn Ads',
+  sys_origin_meta_ads_network: 'Meta Ads from network',
+  sys_origin_google_ads_network: 'Google Ads from network',
+  sys_origin_tiktok_ads_network: 'TikTok Ads from network',
+  sys_origin_google: 'Google',
+  sys_origin_bing: 'Bing',
+  sys_origin_yandex: 'Yandex',
+  sys_origin_duckduckgo: 'DuckDuckGo',
+  sys_origin_chatgpt: 'ChatGPT',
+  sys_origin_telegram: 'Telegram',
+  sys_origin_whatsapp: 'WhatsApp',
+  sys_origin_viber: 'Viber',
+  sys_origin_youtube: 'YouTube',
+  sys_origin_instagram: 'Instagram',
+  sys_origin_facebook: 'Facebook',
+  sys_origin_threads: 'Threads',
+  sys_origin_direct: 'Direct visit',
+  sys_origin_unknown: 'Unknown origin',
+  sys_channel_paid_social: 'Paid social',
+  sys_channel_paid_search: 'Paid search',
+  sys_channel_ai_assistants: 'AI assistants',
+  sys_channel_organic_search: 'Organic search',
+  sys_channel_messenger: 'Messengers',
+  sys_channel_email: 'Email',
+  sys_channel_organic_social_medium: 'Organic social (medium)',
+  sys_channel_organic_social_origin: 'Organic social (origin)',
+  sys_channel_organic_social_threads: 'Organic social (Threads)',
+  sys_channel_referral: 'Referral',
+  sys_channel_direct: 'Direct',
+}
+
+/**
+ * Prior Ukrainian labels that the backfill still rewrites to English. Kept so
+ * a one-time rename does not require clearing operator-visible names first.
+ * Operator edits to anything else are left alone.
+ */
+const LEGACY_UKRAINIAN_TRAFFIC_RULE_NAMES: readonly string[] = [
+  'Проєкція UTM на витрати',
+  'Проєкція UTM на візити',
+  'Meta Ads з мережі',
+  'Google Ads з мережі',
+  'TikTok Ads з мережі',
+  'Прямий захід',
+  'Невідоме походження',
+  'Платна соцмережа',
+  'Платний пошук',
+  'ШІ-асистенти',
+  'Органічний пошук',
+  'Месенджери',
+  'Органічна соцмережа medium',
+  'Органічна соцмережа origin',
+  'Органічна соцмережа Threads',
+  'Реферальний трафік',
+  'Прямий канал',
+]
+
+/** Escapes a string literal for embedding in a BigQuery SQL statement. */
+function sqlStringLiteral(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+}
+
+/**
+ * Fills empty `name` on known system rules, and rewrites the prior Ukrainian
+ * labels to English. Idempotent for anything else: operator edits are left alone.
+ */
+export function buildSystemTrafficRuleNamesBackfillQuery(
+  projectId: string,
+  datasetId: string,
+): string {
+  const cases = Object.entries(SYSTEM_TRAFFIC_RULE_NAMES)
+    .map(([ruleId, name]) => `when ${sqlStringLiteral(ruleId)} then ${sqlStringLiteral(name)}`)
+    .join('\n    ')
+  const legacyNames = LEGACY_UKRAINIAN_TRAFFIC_RULE_NAMES.map(sqlStringLiteral).join(', ')
+
+  return `update \`${projectId}.${datasetId}.${TRAFFIC_RULES_TABLE_ID}\`
+set name = case rule_id
+    ${cases}
+    else name
+  end
+where is_system = true
+  and (name is null or name = '' or name in (${legacyNames}))
+  and rule_id in (${Object.keys(SYSTEM_TRAFFIC_RULE_NAMES)
+    .map(sqlStringLiteral)
+    .join(', ')})`
+}
+
+/** WHERE predicate shared by the backfill UPDATE and its pending-row count. */
+export function systemTrafficRuleNamesBackfillPendingPredicate(): string {
+  const legacyNames = LEGACY_UKRAINIAN_TRAFFIC_RULE_NAMES.map(sqlStringLiteral).join(', ')
+  return `is_system = true
+  and (name is null or name = '' or name in (${legacyNames}))
+  and rule_id in (${Object.keys(SYSTEM_TRAFFIC_RULE_NAMES)
+    .map(sqlStringLiteral)
+    .join(', ')})`
+}
 
 /**
  * Builds the one-time seed of system default classification rules. Executed
@@ -130,57 +243,58 @@ export const TRAFFIC_RULES_TABLE_SCHEMA = [
  * case-sensitive.
  */
 export function buildTrafficRulesSeedQuery(projectId: string, datasetId: string): string {
+  const n = SYSTEM_TRAFFIC_RULE_NAMES
   return `insert into \`${projectId}.${datasetId}.${TRAFFIC_RULES_TABLE_ID}\`
-(rule_id, priority, is_active, is_system, stage, target, applies_to_web, source_regex, medium_regex, ad_destination_regex, data_source_regex, traffic_origin_regex, set_source, set_medium, set_campaign, set_content, set_term, set_traffic_origin, set_traffic_channel)
+(rule_id, priority, is_active, is_system, stage, target, applies_to_web, source_regex, medium_regex, ad_destination_regex, data_source_regex, traffic_origin_regex, set_source, set_medium, set_campaign, set_content, set_term, set_traffic_origin, set_traffic_channel, name)
 values
 -- Utm stage: projection pair for non-web ads (all-or-nothing, per-row truth)
 -- ad_destination taxonomy is always lowercase from connectors — no (?i)
-('sys_utm_projection_ad_costs', 1000, false, true, 'utm', 'ad_cost', false, null, null, '^(call|chat|app|lead_form|engagement|catalog|multi_destination|unknown)$', null, null, '{data_source}', '(not set)', '{campaign_name}', '{adgroup_name}', '{ad_name}', null, null),
-('sys_utm_projection_visits', 1001, false, true, 'utm', 'visit', false, null, null, '^(call|chat|app|lead_form|engagement|catalog|multi_destination|unknown)$', null, null, '{data_source}', '(not set)', '{campaign_name}', '{adgroup_name}', '{ad_name}', null, null),
+('sys_utm_projection_ad_costs', 1000, false, true, 'utm', 'ad_cost', false, null, null, '^(call|chat|app|lead_form|engagement|catalog|multi_destination|unknown)$', null, null, '{data_source}', '(not set)', '{campaign_name}', '{adgroup_name}', '{ad_name}', null, null, ${sqlStringLiteral(n.sys_utm_projection_ad_costs)}),
+('sys_utm_projection_visits', 1001, false, true, 'utm', 'visit', false, null, null, '^(call|chat|app|lead_form|engagement|catalog|multi_destination|unknown)$', null, null, '{data_source}', '(not set)', '{campaign_name}', '{adgroup_name}', '{ad_name}', null, null, ${sqlStringLiteral(n.sys_utm_projection_visits)}),
 -- Origin stage: paid sources by utm labels ((?i) — catch Facebook/FACEBOOK/…)
-('sys_origin_google_ads', 1000, true, true, 'origin', 'both', null, '(?i)^(google|adwords|google[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_search|paidsearch)$', null, null, null, null, null, null, null, null, 'Google Ads', null),
-('sys_origin_bing_ads', 1010, true, true, 'origin', 'both', null, '(?i)^(bing|bing[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_search|paidsearch)$', null, null, null, null, null, null, null, null, 'Bing Ads', null),
-('sys_origin_meta_ads', 1020, true, true, 'origin', 'both', null, '(?i)^(fb|facebook|meta|ig|instagram|facebook[ _-]?ads|meta[ _-]?ads|an|msg)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'Meta Ads', null),
-('sys_origin_tiktok_ads', 1030, true, true, 'origin', 'both', null, '(?i)^(tiktok|tt|tiktok[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'TikTok Ads', null),
-('sys_origin_linkedin_ads', 1040, true, true, 'origin', 'both', null, '(?i)^(linkedin|li|linkedin[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'LinkedIn Ads', null),
+('sys_origin_google_ads', 1000, true, true, 'origin', 'both', null, '(?i)^(google|adwords|google[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_search|paidsearch)$', null, null, null, null, null, null, null, null, 'Google Ads', null, ${sqlStringLiteral(n.sys_origin_google_ads)}),
+('sys_origin_bing_ads', 1010, true, true, 'origin', 'both', null, '(?i)^(bing|bing[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_search|paidsearch)$', null, null, null, null, null, null, null, null, 'Bing Ads', null, ${sqlStringLiteral(n.sys_origin_bing_ads)}),
+('sys_origin_meta_ads', 1020, true, true, 'origin', 'both', null, '(?i)^(fb|facebook|meta|ig|instagram|facebook[ _-]?ads|meta[ _-]?ads|an|msg)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'Meta Ads', null, ${sqlStringLiteral(n.sys_origin_meta_ads)}),
+('sys_origin_tiktok_ads', 1030, true, true, 'origin', 'both', null, '(?i)^(tiktok|tt|tiktok[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'TikTok Ads', null, ${sqlStringLiteral(n.sys_origin_tiktok_ads)}),
+('sys_origin_linkedin_ads', 1040, true, true, 'origin', 'both', null, '(?i)^(linkedin|li|linkedin[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'LinkedIn Ads', null, ${sqlStringLiteral(n.sys_origin_linkedin_ads)}),
 -- Origin stage: paid sources by network name in source (labels produced by
 -- the projection pair: source = data_source, e.g. FACEBOOK_ADS)
-('sys_origin_meta_ads_network', 1060, true, true, 'origin', 'both', null, '(?i)^(facebook[ _-]?ads|meta[ _-]?ads)$', null, null, null, null, null, null, null, null, null, 'Meta Ads', null),
-('sys_origin_google_ads_network', 1070, true, true, 'origin', 'both', null, '(?i)^google[ _-]?ads$', null, null, null, null, null, null, null, null, null, 'Google Ads', null),
-('sys_origin_tiktok_ads_network', 1080, true, true, 'origin', 'both', null, '(?i)^tiktok[ _-]?ads$', null, null, null, null, null, null, null, null, null, 'TikTok Ads', null),
+('sys_origin_meta_ads_network', 1060, true, true, 'origin', 'both', null, '(?i)^(facebook[ _-]?ads|meta[ _-]?ads)$', null, null, null, null, null, null, null, null, null, 'Meta Ads', null, ${sqlStringLiteral(n.sys_origin_meta_ads_network)}),
+('sys_origin_google_ads_network', 1070, true, true, 'origin', 'both', null, '(?i)^google[ _-]?ads$', null, null, null, null, null, null, null, null, null, 'Google Ads', null, ${sqlStringLiteral(n.sys_origin_google_ads_network)}),
+('sys_origin_tiktok_ads_network', 1080, true, true, 'origin', 'both', null, '(?i)^tiktok[ _-]?ads$', null, null, null, null, null, null, null, null, null, 'TikTok Ads', null, ${sqlStringLiteral(n.sys_origin_tiktok_ads_network)}),
 -- Origin stage: search engines
-('sys_origin_google', 1100, true, true, 'origin', 'both', null, '(?i)^(google|www[.]google[.][a-z.]+|google[.][a-z.]+)$', null, null, null, null, null, null, null, null, null, 'Google', null),
-('sys_origin_bing', 1110, true, true, 'origin', 'both', null, '(?i)^(bing|www[.]bing[.]com|bing[.]com)$', null, null, null, null, null, null, null, null, null, 'Bing', null),
-('sys_origin_yandex', 1120, true, true, 'origin', 'both', null, '(?i)^(yandex|yandex[.][a-z.]+|www[.]yandex[.][a-z.]+)$', null, null, null, null, null, null, null, null, null, 'Yandex', null),
-('sys_origin_duckduckgo', 1130, true, true, 'origin', 'both', null, '(?i)^(duckduckgo|duckduckgo[.]com)$', null, null, null, null, null, null, null, null, null, 'DuckDuckGo', null),
+('sys_origin_google', 1100, true, true, 'origin', 'both', null, '(?i)^(google|www[.]google[.][a-z.]+|google[.][a-z.]+)$', null, null, null, null, null, null, null, null, null, 'Google', null, ${sqlStringLiteral(n.sys_origin_google)}),
+('sys_origin_bing', 1110, true, true, 'origin', 'both', null, '(?i)^(bing|www[.]bing[.]com|bing[.]com)$', null, null, null, null, null, null, null, null, null, 'Bing', null, ${sqlStringLiteral(n.sys_origin_bing)}),
+('sys_origin_yandex', 1120, true, true, 'origin', 'both', null, '(?i)^(yandex|yandex[.][a-z.]+|www[.]yandex[.][a-z.]+)$', null, null, null, null, null, null, null, null, null, 'Yandex', null, ${sqlStringLiteral(n.sys_origin_yandex)}),
+('sys_origin_duckduckgo', 1130, true, true, 'origin', 'both', null, '(?i)^(duckduckgo|duckduckgo[.]com)$', null, null, null, null, null, null, null, null, null, 'DuckDuckGo', null, ${sqlStringLiteral(n.sys_origin_duckduckgo)}),
 -- Origin stage: AI assistants (official UTM only — OpenAI documents
 -- utm_source=chatgpt.com on ChatGPT citation / search referral links)
-('sys_origin_chatgpt', 1180, true, true, 'origin', 'both', null, '(?i)^chatgpt[.]com$', null, null, null, null, null, null, null, null, null, 'ChatGPT', null),
+('sys_origin_chatgpt', 1180, true, true, 'origin', 'both', null, '(?i)^chatgpt[.]com$', null, null, null, null, null, null, null, null, null, 'ChatGPT', null, ${sqlStringLiteral(n.sys_origin_chatgpt)}),
 -- Origin stage: messengers and social referrers
-('sys_origin_telegram', 1200, true, true, 'origin', 'both', null, '(?i)^(telegram|t[.]me|telegram[.]me|web[.]telegram[.]org|org[.]telegram[.]messenger)$', null, null, null, null, null, null, null, null, null, 'Telegram', null),
-('sys_origin_whatsapp', 1210, true, true, 'origin', 'both', null, '(?i)^(whatsapp|wa|api[.]whatsapp[.]com|chat[.]whatsapp[.]com|com[.]whatsapp)$', null, null, null, null, null, null, null, null, null, 'WhatsApp', null),
-('sys_origin_viber', 1220, true, true, 'origin', 'both', null, '(?i)^(viber|com[.]viber[.]voip)$', null, null, null, null, null, null, null, null, null, 'Viber', null),
-('sys_origin_youtube', 1230, true, true, 'origin', 'both', null, '(?i)^(youtube|youtube[.]com|www[.]youtube[.]com|m[.]youtube[.]com)$', null, null, null, null, null, null, null, null, null, 'YouTube', null),
-('sys_origin_instagram', 1240, true, true, 'origin', 'both', null, '(?i)^(instagram[.]com|l[.]instagram[.]com|www[.]instagram[.]com|com[.]instagram[.]android)$', null, null, null, null, null, null, null, null, null, 'Instagram', null),
-('sys_origin_facebook', 1250, true, true, 'origin', 'both', null, '(?i)^(facebook[.]com|m[.]facebook[.]com|l[.]facebook[.]com|lm[.]facebook[.]com|www[.]facebook[.]com)$', null, null, null, null, null, null, null, null, null, 'Facebook', null),
-('sys_origin_threads', 1255, true, true, 'origin', 'both', null, '(?i)^l[.]threads[.]com$', null, null, null, null, null, null, null, null, null, 'Threads', null),
+('sys_origin_telegram', 1200, true, true, 'origin', 'both', null, '(?i)^(telegram|t[.]me|telegram[.]me|web[.]telegram[.]org|org[.]telegram[.]messenger)$', null, null, null, null, null, null, null, null, null, 'Telegram', null, ${sqlStringLiteral(n.sys_origin_telegram)}),
+('sys_origin_whatsapp', 1210, true, true, 'origin', 'both', null, '(?i)^(whatsapp|wa|api[.]whatsapp[.]com|chat[.]whatsapp[.]com|com[.]whatsapp)$', null, null, null, null, null, null, null, null, null, 'WhatsApp', null, ${sqlStringLiteral(n.sys_origin_whatsapp)}),
+('sys_origin_viber', 1220, true, true, 'origin', 'both', null, '(?i)^(viber|com[.]viber[.]voip)$', null, null, null, null, null, null, null, null, null, 'Viber', null, ${sqlStringLiteral(n.sys_origin_viber)}),
+('sys_origin_youtube', 1230, true, true, 'origin', 'both', null, '(?i)^(youtube|youtube[.]com|www[.]youtube[.]com|m[.]youtube[.]com)$', null, null, null, null, null, null, null, null, null, 'YouTube', null, ${sqlStringLiteral(n.sys_origin_youtube)}),
+('sys_origin_instagram', 1240, true, true, 'origin', 'both', null, '(?i)^(instagram[.]com|l[.]instagram[.]com|www[.]instagram[.]com|com[.]instagram[.]android)$', null, null, null, null, null, null, null, null, null, 'Instagram', null, ${sqlStringLiteral(n.sys_origin_instagram)}),
+('sys_origin_facebook', 1250, true, true, 'origin', 'both', null, '(?i)^(facebook[.]com|m[.]facebook[.]com|l[.]facebook[.]com|lm[.]facebook[.]com|www[.]facebook[.]com)$', null, null, null, null, null, null, null, null, null, 'Facebook', null, ${sqlStringLiteral(n.sys_origin_facebook)}),
+('sys_origin_threads', 1255, true, true, 'origin', 'both', null, '(?i)^l[.]threads[.]com$', null, null, null, null, null, null, null, null, null, 'Threads', null, ${sqlStringLiteral(n.sys_origin_threads)}),
 -- Origin stage: direct (exact marker)
-('sys_origin_direct', 1300, true, true, 'origin', 'both', null, '^[(]direct[)]$', null, null, null, null, null, null, null, null, null, 'Direct', null),
+('sys_origin_direct', 1300, true, true, 'origin', 'both', null, '^[(]direct[)]$', null, null, null, null, null, null, null, null, null, 'Direct', null, ${sqlStringLiteral(n.sys_origin_direct)}),
 -- Origin stage: empty/null source → Unknown. Job conditions match via
 -- ifnull(source, ''), so '^$' covers both null and empty string. Localizable
 -- by changing set_traffic_origin; the job still keeps a hardcoded 'Unknown'
 -- fallback if this rule is missing.
-('sys_origin_unknown', 1310, true, true, 'origin', 'both', null, '^$', null, null, null, null, null, null, null, null, null, 'Unknown', null),
+('sys_origin_unknown', 1310, true, true, 'origin', 'both', null, '^$', null, null, null, null, null, null, null, null, null, 'Unknown', null, ${sqlStringLiteral(n.sys_origin_unknown)}),
 -- Channel stage: resolved from traffic_origin ((?i) — origins are Title Case)
-('sys_channel_paid_social', 2000, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^(meta ads|tiktok ads|linkedin ads|instagram direct)$', null, null, null, null, null, null, 'Paid Social'),
-('sys_channel_paid_search', 2010, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^(google ads|bing ads)$', null, null, null, null, null, null, 'Paid Search'),
-('sys_channel_ai_assistants', 2015, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^chatgpt$', null, null, null, null, null, null, 'AI Assistants'),
-('sys_channel_organic_search', 2020, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^(google|bing|yandex|duckduckgo)$', null, null, null, null, null, null, 'Organic Search'),
-('sys_channel_messenger', 2030, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^(telegram|whatsapp|viber)$', null, null, null, null, null, null, 'Messenger'),
-('sys_channel_email', 2040, true, true, 'channel', 'both', null, null, '(?i)^(email|e-mail|e_mail|newsletter)$', null, null, null, null, null, null, null, null, null, 'Email'),
-('sys_channel_organic_social_medium', 2050, true, true, 'channel', 'both', null, null, '(?i)^(social|organic_social|social_organic|organicsocial)$', null, null, null, null, null, null, null, null, null, 'Organic Social'),
-('sys_channel_organic_social_origin', 2060, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^(instagram|facebook|youtube)$', null, null, null, null, null, null, 'Organic Social'),
-('sys_channel_organic_social_threads', 2065, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^threads$', null, null, null, null, null, null, 'Organic Social'),
-('sys_channel_referral', 2070, true, true, 'channel', 'both', null, null, '(?i)^referral$', null, null, null, null, null, null, null, null, null, 'Referral'),
-('sys_channel_direct', 2080, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^direct$', null, null, null, null, null, null, 'Direct')`
+('sys_channel_paid_social', 2000, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^(meta ads|tiktok ads|linkedin ads|instagram direct)$', null, null, null, null, null, null, 'Paid Social', ${sqlStringLiteral(n.sys_channel_paid_social)}),
+('sys_channel_paid_search', 2010, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^(google ads|bing ads)$', null, null, null, null, null, null, 'Paid Search', ${sqlStringLiteral(n.sys_channel_paid_search)}),
+('sys_channel_ai_assistants', 2015, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^chatgpt$', null, null, null, null, null, null, 'AI Assistants', ${sqlStringLiteral(n.sys_channel_ai_assistants)}),
+('sys_channel_organic_search', 2020, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^(google|bing|yandex|duckduckgo)$', null, null, null, null, null, null, 'Organic Search', ${sqlStringLiteral(n.sys_channel_organic_search)}),
+('sys_channel_messenger', 2030, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^(telegram|whatsapp|viber)$', null, null, null, null, null, null, 'Messenger', ${sqlStringLiteral(n.sys_channel_messenger)}),
+('sys_channel_email', 2040, true, true, 'channel', 'both', null, null, '(?i)^(email|e-mail|e_mail|newsletter)$', null, null, null, null, null, null, null, null, null, 'Email', ${sqlStringLiteral(n.sys_channel_email)}),
+('sys_channel_organic_social_medium', 2050, true, true, 'channel', 'both', null, null, '(?i)^(social|organic_social|social_organic|organicsocial)$', null, null, null, null, null, null, null, null, null, 'Organic Social', ${sqlStringLiteral(n.sys_channel_organic_social_medium)}),
+('sys_channel_organic_social_origin', 2060, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^(instagram|facebook|youtube)$', null, null, null, null, null, null, 'Organic Social', ${sqlStringLiteral(n.sys_channel_organic_social_origin)}),
+('sys_channel_organic_social_threads', 2065, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^threads$', null, null, null, null, null, null, 'Organic Social', ${sqlStringLiteral(n.sys_channel_organic_social_threads)}),
+('sys_channel_referral', 2070, true, true, 'channel', 'both', null, null, '(?i)^referral$', null, null, null, null, null, null, null, null, null, 'Referral', ${sqlStringLiteral(n.sys_channel_referral)}),
+('sys_channel_direct', 2080, true, true, 'channel', 'both', null, null, null, null, null, '(?i)^direct$', null, null, null, null, null, null, 'Direct', ${sqlStringLiteral(n.sys_channel_direct)})`
 }
