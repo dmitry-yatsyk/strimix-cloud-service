@@ -25,9 +25,9 @@ export interface IAttributionJobStatus {
   /** True when Google reports a PENDING or RUNNING transfer run. */
   running: boolean
   /**
-   * ISO-8601 timestamp of the most recent transfer run (newest by start time).
-   * Prefers end time when that run SUCCEEDED; otherwise start time. Null when
-   * there are no runs, or when the transfer config is not configured.
+   * ISO-8601 timestamp of the most recent finished (SUCCEEDED/FAILED/CANCELLED)
+   * transfer run: its end time, else start time. Null when there are no finished
+   * runs, or when the transfer config is not configured.
    */
   last_run_at: string | null
   /**
@@ -84,26 +84,25 @@ async function readLiveStatus(
   session: Awaited<ReturnType<typeof openTrafficSettingsSession>>,
   name: string,
 ): Promise<IAttributionJobStatus> {
-  const [config, runStatus] = await Promise.all([
+  const [config, running, latestFinished] = await Promise.all([
     session.bigqueryApi.getScheduledQuery(name, { statusFieldsOnly: true }),
-    session.bigqueryApi.getScheduledQueryRunStatus(name),
+    session.bigqueryApi.hasActiveScheduledQueryRun(name),
+    session.bigqueryApi.getLatestFinishedTransferRun(name),
   ])
 
   if (!config) {
     return notConfiguredStatus(projectId)
   }
 
-  const { running, last_run_at, latest_run_state } = runStatus
-
   return {
     project_id: projectId,
     running,
-    last_run_at,
+    last_run_at: latestFinished?.last_run_at ?? null,
     status: mapAttributionJobHealthStatus({
       disabled: config.disabled,
       disableAutoScheduling: config.disableAutoScheduling,
       configState: config.state,
-      latestRunState: latest_run_state,
+      latestRunState: latestFinished?.latest_run_state ?? null,
     }),
     configured: true,
   }
@@ -142,7 +141,7 @@ export async function getAttributionJobStatus(projectId: number): Promise<IAttri
  */
 export async function runAttributionJob(projectId: number): Promise<IAttributionJobRunResult> {
   const { session, name } = await requireScheduledQueryName(projectId)
-  const alreadyRunning = await session.bigqueryApi.isScheduledQueryRunActive(name)
+  const alreadyRunning = await session.bigqueryApi.hasActiveScheduledQueryRun(name)
 
   if (alreadyRunning) {
     throw TrafficSettingsError.attributionJobAlreadyRunning()
@@ -150,7 +149,7 @@ export async function runAttributionJob(projectId: number): Promise<IAttribution
 
   await session.bigqueryApi.startScheduledQueryManualRun(name)
 
-  // Keep the pre-start isScheduledQueryRunActive guard: code/comments do not
+  // Keep the pre-start hasActiveScheduledQueryRun guard: code/comments do not
   // prove startManualTransferRuns rejects overlapping PENDING/RUNNING runs.
   // Skip post-start readLiveStatus — no extra listTransferRuns / getTransferConfig.
   return {

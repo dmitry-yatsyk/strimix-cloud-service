@@ -1,19 +1,60 @@
-import type { protos } from '@google-cloud/bigquery-data-transfer'
+import { protos } from '@google-cloud/bigquery-data-transfer'
 
 type ITransferRun = protos.google.cloud.bigquery.datatransfer.v1.ITransferRun
 type ITimestamp = protos.google.protobuf.ITimestamp
 
-/** PENDING / RUNNING — matches Data Transfer TransferState enum numbers. */
-export const TRANSFER_STATE_PENDING = 2
-export const TRANSFER_STATE_RUNNING = 3
+const TransferState = protos.google.cloud.bigquery.datatransfer.v1.TransferState
+
+/** Numeric google.cloud.bigquery.datatransfer.v1.TransferState value. */
+export type TransferStateNumber = protos.google.cloud.bigquery.datatransfer.v1.TransferState
+
+export const ACTIVE_TRANSFER_STATES: readonly TransferStateNumber[] = [
+  TransferState.PENDING,
+  TransferState.RUNNING,
+]
+
+export const FINISHED_TRANSFER_STATES: readonly TransferStateNumber[] = [
+  TransferState.SUCCEEDED,
+  TransferState.FAILED,
+  TransferState.CANCELLED,
+]
+
+/** Finished runs fetched in one page to pick the most recent one from. */
+export const FINISHED_TRANSFER_RUNS_PAGE_SIZE = 20
+
+function isKnownTransferState(value: number): value is TransferStateNumber {
+  return Number.isInteger(value) && typeof (TransferState as Record<number, unknown>)[value] === 'string'
+}
 
 /**
- * Enough runs to cover a concurrent active run plus recent finished ones when
- * listTransferRuns is unfiltered. Status only needs "any active?" + "latest".
+ * Normalizes a TransferState to its numeric enum value, or null when unknown.
+ *
+ * google-gax loads protos with `enums: String`, so TransferRun.state and
+ * TransferConfig.state arrive as names ('RUNNING', 'FAILED', ...) at runtime even
+ * though the typings also allow numbers.
  */
-export const TRANSFER_RUNS_STATUS_PAGE_SIZE = 10
+export function normalizeTransferState(state: unknown): TransferStateNumber | null {
+  if (state == null) return null
+  if (typeof state === 'number') {
+    return isKnownTransferState(state) ? state : null
+  }
+  if (typeof state !== 'string') return null
 
-function protobufTimestampToMs(ts: ITimestamp | null | undefined): number | null {
+  const trimmed = state.trim()
+  if (trimmed === '') return null
+  if (/^\d+$/.test(trimmed)) {
+    const numeric = Number(trimmed)
+    return isKnownTransferState(numeric) ? numeric : null
+  }
+  if (Object.prototype.hasOwnProperty.call(TransferState, trimmed)) {
+    const value = (TransferState as unknown as Record<string, unknown>)[trimmed]
+    return typeof value === 'number' && isKnownTransferState(value) ? value : null
+  }
+  return null
+}
+
+/** Seconds may be a number, a string (`longs: String`) or a Long-like object. */
+export function protobufTimestampToMs(ts: ITimestamp | null | undefined): number | null {
   if (!ts || ts.seconds == null) return null
   const rawSeconds = ts.seconds
   const seconds =
@@ -21,17 +62,24 @@ function protobufTimestampToMs(ts: ITimestamp | null | undefined): number | null
       ? (rawSeconds as { toNumber: () => number }).toNumber()
       : Number(rawSeconds)
   if (!Number.isFinite(seconds) || seconds <= 0) return null
-  const nanos = typeof ts.nanos === 'number' ? ts.nanos : 0
-  return seconds * 1000 + Math.floor(nanos / 1e6)
+  const nanos = Number(ts.nanos ?? 0)
+  return seconds * 1000 + Math.floor((Number.isFinite(nanos) ? nanos : 0) / 1e6)
 }
 
-/**
- * Sort key for "most recent" transfer run. ListTransferRuns order is not
- * documented in the proto; existing client comments claim newest-first by start
- * time, but we still pick max by timestamp so pageSize > 1 stays correct.
- */
-export function transferRunRecencyMs(run: ITransferRun): number {
+export function protobufTimestampToIso(ts: ITimestamp | null | undefined): string | null {
+  const ms = protobufTimestampToMs(ts)
+  return ms == null ? null : new Date(ms).toISOString()
+}
+
+export function isActiveTransferRun(run: ITransferRun): boolean {
+  const state = normalizeTransferState(run.state)
+  return state != null && ACTIVE_TRANSFER_STATES.includes(state)
+}
+
+/** Recency of a finished run: endTime, then startTime, runTime, scheduleTime. */
+export function finishedTransferRunRecencyMs(run: ITransferRun): number {
   return (
+    protobufTimestampToMs(run.endTime) ??
     protobufTimestampToMs(run.startTime) ??
     protobufTimestampToMs(run.runTime) ??
     protobufTimestampToMs(run.scheduleTime) ??
@@ -39,19 +87,17 @@ export function transferRunRecencyMs(run: ITransferRun): number {
   )
 }
 
-export function isActiveTransferRun(run: ITransferRun): boolean {
-  return run.state === TRANSFER_STATE_PENDING || run.state === TRANSFER_STATE_RUNNING
-}
-
-/** Newest run by startTime (then runTime / scheduleTime). Null when empty. */
-export function pickLatestTransferRun(runs: readonly ITransferRun[]): ITransferRun | null {
+/** Most recent run by finishedTransferRunRecencyMs. Null when empty. */
+export function pickLatestFinishedTransferRun(
+  runs: readonly ITransferRun[] | null | undefined,
+): ITransferRun | null {
   if (!Array.isArray(runs) || runs.length === 0) return null
 
   let latest = runs[0]
-  let latestMs = transferRunRecencyMs(latest)
+  let latestMs = finishedTransferRunRecencyMs(latest)
   for (let i = 1; i < runs.length; i++) {
     const candidate = runs[i]
-    const ms = transferRunRecencyMs(candidate)
+    const ms = finishedTransferRunRecencyMs(candidate)
     if (ms > latestMs) {
       latest = candidate
       latestMs = ms
@@ -60,6 +106,7 @@ export function pickLatestTransferRun(runs: readonly ITransferRun[]): ITransferR
   return latest
 }
 
-export function hasActiveTransferRun(runs: readonly ITransferRun[]): boolean {
-  return Array.isArray(runs) && runs.some(isActiveTransferRun)
+/** ISO-8601 of the run's endTime, else startTime. Null when neither is set. */
+export function transferRunLastRunAt(run: ITransferRun): string | null {
+  return protobufTimestampToIso(run.endTime) ?? protobufTimestampToIso(run.startTime)
 }

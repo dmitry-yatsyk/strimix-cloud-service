@@ -15,39 +15,30 @@ import type {
 import type { CredentialBody } from 'google-auth-library'
 import { DataTransferServiceClient, protos } from '@google-cloud/bigquery-data-transfer'
 import {
-  hasActiveTransferRun,
-  pickLatestTransferRun,
-  TRANSFER_RUNS_STATUS_PAGE_SIZE,
+  ACTIVE_TRANSFER_STATES,
+  FINISHED_TRANSFER_RUNS_PAGE_SIZE,
+  FINISHED_TRANSFER_STATES,
+  isActiveTransferRun,
+  normalizeTransferState,
+  pickLatestFinishedTransferRun,
+  transferRunLastRunAt,
+  type TransferStateNumber,
 } from './transfer-run-status'
 
-type TransferStateEnum = typeof protos.google.cloud.bigquery.datatransfer.v1.TransferState
 type ITransferRun = protos.google.cloud.bigquery.datatransfer.v1.ITransferRun
-type ITimestamp = protos.google.protobuf.ITimestamp
 
-/**
- * Prefer end time when the run SUCCEEDED; otherwise start time. Returns ISO-8601
- * or null when neither timestamp is present.
- */
-function pickTransferRunTimestamp(
-  run: ITransferRun,
-  TransferState: TransferStateEnum,
-): string | null {
-  const succeeded = run.state === TransferState.SUCCEEDED
-  const raw: ITimestamp | null | undefined =
-    succeeded && run.endTime ? run.endTime : run.startTime
-  return protobufTimestampToIso(raw)
-}
+/** Omits TransferRun `params` (the scheduled query SQL) to keep list responses small. */
+const TRANSFER_RUNS_FIELD_MASK =
+  'transferRuns.name,transferRuns.state,transferRuns.startTime,transferRuns.endTime,transferRuns.runTime,transferRuns.scheduleTime,nextPageToken'
 
-function protobufTimestampToIso(ts: ITimestamp | null | undefined): string | null {
-  if (!ts || ts.seconds == null) return null
-  const rawSeconds = ts.seconds
-  const seconds =
-    typeof rawSeconds === 'object' && rawSeconds != null && 'toNumber' in rawSeconds
-      ? (rawSeconds as { toNumber: () => number }).toNumber()
-      : Number(rawSeconds)
-  if (!Number.isFinite(seconds) || seconds <= 0) return null
-  const nanos = typeof ts.nanos === 'number' ? ts.nanos : 0
-  return new Date(seconds * 1000 + Math.floor(nanos / 1e6)).toISOString()
+/** Single page only: gax auto-pagination would walk the entire run history. */
+const TRANSFER_RUNS_PAGE_CALL_OPTIONS = {
+  autoPaginate: false,
+  otherArgs: {
+    headers: {
+      'x-goog-fieldmask': TRANSFER_RUNS_FIELD_MASK,
+    },
+  },
 }
 
 export class BigQueryApi {
@@ -359,10 +350,10 @@ export class BigQueryApi {
     /** True when auto-scheduling is off (`scheduleOptions.disableAutoScheduling`). */
     disableAutoScheduling: boolean
     /**
-     * TransferConfig.state from Data Transfer (TransferState enum number), or
-     * null when Google omits it. FAILED (5) surfaces as health ERROR.
+     * TransferConfig.state normalized to the numeric TransferState, or null when
+     * Google omits it. FAILED (5) surfaces as health ERROR.
      */
-    state: number | null
+    state: TransferStateNumber | null
     serviceAccountName: string | null
   } | null> {
     // Health mapping only needs name/state/disabled/scheduleOptions.disableAutoScheduling.
@@ -386,7 +377,6 @@ export class BigQueryApi {
     const queryValue = options?.statusFieldsOnly
       ? null
       : config.params?.fields?.query?.stringValue
-    const rawState = config.state
 
     return {
       name: config.name as string,
@@ -396,7 +386,7 @@ export class BigQueryApi {
       destinationDatasetId: config.destinationDatasetId ?? null,
       disabled: Boolean(config.disabled),
       disableAutoScheduling: Boolean(config.scheduleOptions?.disableAutoScheduling),
-      state: typeof rawState === 'number' ? rawState : null,
+      state: normalizeTransferState(config.state),
       // Only exposed on the config for some API versions; absent means
       // "unchanged" on update, which is exactly what we want.
       serviceAccountName: (config as { serviceAccountName?: string }).serviceAccountName ?? null,
@@ -495,49 +485,47 @@ export class BigQueryApi {
   }
 
   /**
-   * Returns whether the scheduled query currently has an active (PENDING or
-   * RUNNING) transfer run. Status is read live from Google Cloud — never from
-   * Mongo.
+   * One PENDING/RUNNING transfer run of the scheduled query, or null when none.
+   * Single states-filtered page (pageSize 1) — read live from Google, never Mongo.
    */
-  public async isScheduledQueryRunActive(name: string): Promise<boolean> {
-    const status = await this.getScheduledQueryRunStatus(name)
-    return status.running
+  public async getActiveTransferRun(name: string): Promise<ITransferRun | null> {
+    const [runs] = await this.bqTransfer.listTransferRuns(
+      { parent: name, states: [...ACTIVE_TRANSFER_STATES], pageSize: 1 },
+      TRANSFER_RUNS_PAGE_CALL_OPTIONS,
+    )
+    const list = Array.isArray(runs) ? runs : []
+    return list.find(isActiveTransferRun) ?? list[0] ?? null
+  }
+
+  /** Whether the scheduled query currently has a PENDING or RUNNING transfer run. */
+  public async hasActiveScheduledQueryRun(name: string): Promise<boolean> {
+    return (await this.getActiveTransferRun(name)) != null
   }
 
   /**
-   * Live run status for a scheduled query (transfer config), read from Google
-   * Cloud Data Transfer — never from Mongo.
-   *
-   * Single unfiltered listTransferRuns (pageSize 10): derive `running` from any
-   * PENDING/RUNNING in the page, and `last_run_at` / `latest_run_state` from the
-   * newest run by startTime (proto does not guarantee list order).
-   *
-   * - `running`: true when any PENDING or RUNNING transfer run exists.
-   * - `last_run_at`: ISO-8601 of the newest run by start time. Prefers end
-   *   time when that run SUCCEEDED; otherwise start time. Null when there
-   *   are no runs.
-   * - `latest_run_state`: TransferState of that newest run (number), or null.
+   * Most recent SUCCEEDED/FAILED/CANCELLED transfer run, or null when none.
+   * Single states-filtered page. The API does not guarantee list order, so we
+   * pick the newest run by timestamp within the page.
    */
-  public async getScheduledQueryRunStatus(name: string): Promise<{
-    running: boolean
+  public async getLatestFinishedTransferRun(name: string): Promise<{
     last_run_at: string | null
-    latest_run_state: number | null
-  }> {
-    const TransferState = protos.google.cloud.bigquery.datatransfer.v1.TransferState
-
-    const [runs] = await this.bqTransfer.listTransferRuns({
-      parent: name,
-      pageSize: TRANSFER_RUNS_STATUS_PAGE_SIZE,
-    })
-    const list = Array.isArray(runs) ? runs : []
-    const running = hasActiveTransferRun(list)
-    const latest = pickLatestTransferRun(list)
-    const rawLatestState = latest?.state
-
+    latest_run_state: TransferStateNumber | null
+  } | null> {
+    const [runs] = await this.bqTransfer.listTransferRuns(
+      {
+        parent: name,
+        states: [...FINISHED_TRANSFER_STATES],
+        pageSize: FINISHED_TRANSFER_RUNS_PAGE_SIZE,
+      },
+      TRANSFER_RUNS_PAGE_CALL_OPTIONS,
+    )
+    const latest = pickLatestFinishedTransferRun(runs)
+    if (!latest) {
+      return null
+    }
     return {
-      running,
-      last_run_at: latest ? pickTransferRunTimestamp(latest, TransferState) : null,
-      latest_run_state: typeof rawLatestState === 'number' ? rawLatestState : null,
+      last_run_at: transferRunLastRunAt(latest),
+      latest_run_state: normalizeTransferState(latest.state),
     }
   }
 
