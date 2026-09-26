@@ -126,6 +126,9 @@ export const SYSTEM_TRAFFIC_RULE_NAMES: Readonly<Record<string, string>> = {
   sys_origin_meta_ads: 'Meta Ads',
   sys_origin_tiktok_ads: 'TikTok Ads',
   sys_origin_linkedin_ads: 'LinkedIn Ads',
+  sys_origin_microsoft_ads: 'Microsoft Ads',
+  sys_origin_pinterest_ads: 'Pinterest Ads',
+  sys_origin_telegram_ads: 'Telegram Ads',
   sys_origin_referral: 'Referral',
   sys_origin_meta_ads_network: 'Meta Ads from network',
   sys_origin_google_ads_network: 'Google Ads from network',
@@ -138,13 +141,26 @@ export const SYSTEM_TRAFFIC_RULE_NAMES: Readonly<Record<string, string>> = {
   sys_origin_yandex: 'Yandex',
   sys_origin_duckduckgo: 'DuckDuckGo',
   sys_origin_chatgpt: 'ChatGPT',
-  sys_origin_telegram: 'Telegram',
-  sys_origin_whatsapp: 'WhatsApp',
-  sys_origin_viber: 'Viber',
-  sys_origin_youtube: 'YouTube',
-  sys_origin_instagram: 'Instagram',
-  sys_origin_facebook: 'Facebook',
-  sys_origin_threads: 'Threads',
+  sys_origin_email: 'Email',
+  sys_origin_telegram_referrer: 'Telegram referrer',
+  sys_origin_telegram_channel: 'Telegram channel',
+  sys_origin_whatsapp_referrer: 'WhatsApp referrer',
+  sys_origin_whatsapp_messaging: 'WhatsApp',
+  sys_origin_viber_referrer: 'Viber referrer',
+  sys_origin_viber_messaging: 'Viber',
+  sys_origin_youtube_referrer: 'YouTube referrer',
+  sys_origin_youtube_social: 'YouTube',
+  sys_origin_tiktok_referrer: 'TikTok referrer',
+  sys_origin_tiktok_social: 'TikTok',
+  sys_origin_linkedin_social: 'LinkedIn',
+  sys_origin_pinterest_social: 'Pinterest',
+  sys_origin_instagram_referrer: 'Instagram referrer',
+  sys_origin_instagram_social: 'Instagram',
+  sys_origin_facebook_referrer: 'Facebook referrer',
+  sys_origin_facebook_social: 'Facebook',
+  sys_origin_threads_referrer: 'Threads referrer',
+  sys_origin_threads_social: 'Threads',
+  sys_origin_google_business: 'Google Business',
   sys_origin_direct: 'Direct visit',
   sys_origin_unknown: 'Unknown origin',
   sys_channel_paid_social: 'Paid social',
@@ -152,6 +168,7 @@ export const SYSTEM_TRAFFIC_RULE_NAMES: Readonly<Record<string, string>> = {
   sys_channel_ai_assistants: 'AI assistants',
   sys_channel_organic_search: 'Organic search',
   sys_channel_messenger: 'Messengers',
+  sys_channel_messaging: 'Messaging',
   sys_channel_email: 'Email',
   sys_channel_organic_social_medium: 'Organic social (medium)',
   sys_channel_organic_social_origin: 'Organic social (origin)',
@@ -233,11 +250,18 @@ export function systemTrafficRuleNamesBackfillPendingPredicate(): string {
  *    both pipelines produce labels by the same convention.
  *  - origin by network name: catches labels produced by the projection pair
  *    (source = '{data_source}' -> 'FACEBOOK_ADS' etc.)
+ *  - origin referrers (*_referrer): a rule matches only the platform host
+ *    (l.instagram.com, www.tiktok.com, …). Medium is not constrained, so a
+ *    real referral stays that platform. Bare constructor tokens are not
+ *    part of these patterns.
+ *  - origin constructor labels (*_social, *_messaging, *_ads): the source
+ *    is the exact token from the UTM constructor and the medium is required
+ *    (social, messaging, paid, email). A token without that medium is left
+ *    unclassified rather than treated as the platform or as Referral.
  *  - origin referral: medium = referral on any visit (web and synthetic)
  *    sets traffic_origin to Referral. Ad costs are not targeted. Priority
- *    is after the named referrer origins (Google, Instagram, Telegram, …),
- *    so those keep their own origin and only an unrecognized referring
- *    site falls through to Referral.
+ *    is after the referrer origins, so a known host keeps its own origin
+ *    and only an unrecognized referring site falls through to Referral.
  *  - origin of unlabeled ad costs: when all five canonical labels are empty,
  *    an ad_cost row is still classified by its data_source (FACEBOOK_ADS,
  *    GOOGLE_ADS, TIKTOK_ADS). Visits are not targeted: an empty visit does
@@ -269,9 +293,12 @@ values
 -- Origin stage: paid sources by utm labels ((?i) — catch Facebook/FACEBOOK/…)
 ('sys_origin_google_ads', 1000, true, true, 'origin', 'both', true, '(?i)^(google|adwords|google[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_search|paidsearch)$', null, null, null, null, null, null, null, null, 'Google Ads', null, ${sqlStringLiteral(n.sys_origin_google_ads)}),
 ('sys_origin_bing_ads', 1010, true, true, 'origin', 'both', true, '(?i)^(bing|bing[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_search|paidsearch)$', null, null, null, null, null, null, null, null, 'Bing Ads', null, ${sqlStringLiteral(n.sys_origin_bing_ads)}),
+('sys_origin_microsoft_ads', 1015, true, true, 'origin', 'both', true, '(?i)^microsoft_ads$', '(?i)^paid$', null, null, null, null, null, null, null, null, 'Microsoft Ads', null, ${sqlStringLiteral(n.sys_origin_microsoft_ads)}),
 ('sys_origin_meta_ads', 1020, true, true, 'origin', 'both', true, '(?i)^(fb|facebook|meta|ig|th|instagram|facebook[ _-]?ads|meta[ _-]?ads|an|msg)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'Meta Ads', null, ${sqlStringLiteral(n.sys_origin_meta_ads)}),
 ('sys_origin_tiktok_ads', 1030, true, true, 'origin', 'both', true, '(?i)^(tiktok|tt|tiktok[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'TikTok Ads', null, ${sqlStringLiteral(n.sys_origin_tiktok_ads)}),
 ('sys_origin_linkedin_ads', 1040, true, true, 'origin', 'both', true, '(?i)^(linkedin|li|linkedin[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'LinkedIn Ads', null, ${sqlStringLiteral(n.sys_origin_linkedin_ads)}),
+('sys_origin_pinterest_ads', 1045, true, true, 'origin', 'both', true, '(?i)^pinterest_ads$', '(?i)^paid$', null, null, null, null, null, null, null, null, 'Pinterest Ads', null, ${sqlStringLiteral(n.sys_origin_pinterest_ads)}),
+('sys_origin_telegram_ads', 1046, true, true, 'origin', 'both', true, '(?i)^telegram_ads$', '(?i)^paid$', null, null, null, null, null, null, null, null, 'Telegram Ads', null, ${sqlStringLiteral(n.sys_origin_telegram_ads)}),
 -- Origin stage: paid sources by network name in source (labels produced by
 -- the projection pair: source = data_source, e.g. FACEBOOK_ADS)
 ('sys_origin_meta_ads_network', 1060, true, true, 'origin', 'both', true, '(?i)^(facebook[ _-]?ads|meta[ _-]?ads)$', null, null, null, null, null, null, null, null, null, 'Meta Ads', null, ${sqlStringLiteral(n.sys_origin_meta_ads_network)}),
@@ -285,14 +312,32 @@ values
 -- Origin stage: AI assistants (official UTM only — OpenAI documents
 -- utm_source=chatgpt.com on ChatGPT citation / search referral links)
 ('sys_origin_chatgpt', 1180, true, true, 'origin', 'both', true, '(?i)^chatgpt[.]com$', null, null, null, null, null, null, null, null, null, 'ChatGPT', null, ${sqlStringLiteral(n.sys_origin_chatgpt)}),
--- Origin stage: messengers and social referrers
-('sys_origin_telegram', 1200, true, true, 'origin', 'both', true, '(?i)^(telegram|t[.]me|telegram[.]me|web[.]telegram[.]org|org[.]telegram[.]messenger)$', null, null, null, null, null, null, null, null, null, 'Telegram', null, ${sqlStringLiteral(n.sys_origin_telegram)}),
-('sys_origin_whatsapp', 1210, true, true, 'origin', 'both', true, '(?i)^(whatsapp|wa|api[.]whatsapp[.]com|chat[.]whatsapp[.]com|com[.]whatsapp)$', null, null, null, null, null, null, null, null, null, 'WhatsApp', null, ${sqlStringLiteral(n.sys_origin_whatsapp)}),
-('sys_origin_viber', 1220, true, true, 'origin', 'both', true, '(?i)^(viber|com[.]viber[.]voip)$', null, null, null, null, null, null, null, null, null, 'Viber', null, ${sqlStringLiteral(n.sys_origin_viber)}),
-('sys_origin_youtube', 1230, true, true, 'origin', 'both', true, '(?i)^(youtube|youtube[.]com|www[.]youtube[.]com|m[.]youtube[.]com)$', null, null, null, null, null, null, null, null, null, 'YouTube', null, ${sqlStringLiteral(n.sys_origin_youtube)}),
-('sys_origin_instagram', 1240, true, true, 'origin', 'both', true, '(?i)^(instagram[.]com|l[.]instagram[.]com|www[.]instagram[.]com|com[.]instagram[.]android)$', null, null, null, null, null, null, null, null, null, 'Instagram', null, ${sqlStringLiteral(n.sys_origin_instagram)}),
-('sys_origin_facebook', 1250, true, true, 'origin', 'both', true, '(?i)^(facebook[.]com|m[.]facebook[.]com|l[.]facebook[.]com|lm[.]facebook[.]com|www[.]facebook[.]com)$', null, null, null, null, null, null, null, null, null, 'Facebook', null, ${sqlStringLiteral(n.sys_origin_facebook)}),
-('sys_origin_threads', 1255, true, true, 'origin', 'both', true, '(?i)^l[.]threads[.]com$', null, null, null, null, null, null, null, null, null, 'Threads', null, ${sqlStringLiteral(n.sys_origin_threads)}),
+-- Constructor label: source and medium are both the word email.
+('sys_origin_email', 1190, true, true, 'origin', 'both', true, '(?i)^email$', '(?i)^email$', null, null, null, null, null, null, null, null, 'Email', null, ${sqlStringLiteral(n.sys_origin_email)}),
+-- Origin stage: referrer hosts only. Bare tokens (telegram, whatsapp, wa,
+-- viber, youtube) are not included: a utm_source token without the
+-- constructor medium must not be classified as that platform.
+('sys_origin_telegram_referrer', 1200, true, true, 'origin', 'both', true, '(?i)^(t[.]me|telegram[.]me|web[.]telegram[.]org|org[.]telegram[.]messenger)$', null, null, null, null, null, null, null, null, null, 'Telegram', null, ${sqlStringLiteral(n.sys_origin_telegram_referrer)}),
+('sys_origin_telegram_channel', 1201, true, true, 'origin', 'both', true, '(?i)^telegram_channel$', '(?i)^social$', null, null, null, null, null, null, null, null, 'Telegram', null, ${sqlStringLiteral(n.sys_origin_telegram_channel)}),
+('sys_origin_whatsapp_referrer', 1210, true, true, 'origin', 'both', true, '(?i)^(api[.]whatsapp[.]com|chat[.]whatsapp[.]com|com[.]whatsapp)$', null, null, null, null, null, null, null, null, null, 'WhatsApp', null, ${sqlStringLiteral(n.sys_origin_whatsapp_referrer)}),
+('sys_origin_whatsapp_messaging', 1211, true, true, 'origin', 'both', true, '(?i)^whatsapp$', '(?i)^messaging$', null, null, null, null, null, null, null, null, 'WhatsApp', null, ${sqlStringLiteral(n.sys_origin_whatsapp_messaging)}),
+('sys_origin_viber_referrer', 1220, true, true, 'origin', 'both', true, '(?i)^com[.]viber[.]voip$', null, null, null, null, null, null, null, null, null, 'Viber', null, ${sqlStringLiteral(n.sys_origin_viber_referrer)}),
+('sys_origin_viber_messaging', 1221, true, true, 'origin', 'both', true, '(?i)^viber$', '(?i)^messaging$', null, null, null, null, null, null, null, null, 'Viber', null, ${sqlStringLiteral(n.sys_origin_viber_messaging)}),
+('sys_origin_youtube_referrer', 1230, true, true, 'origin', 'both', true, '(?i)^(youtube[.]com|www[.]youtube[.]com|m[.]youtube[.]com)$', null, null, null, null, null, null, null, null, null, 'YouTube', null, ${sqlStringLiteral(n.sys_origin_youtube_referrer)}),
+('sys_origin_youtube_social', 1231, true, true, 'origin', 'both', true, '(?i)^youtube$', '(?i)^social$', null, null, null, null, null, null, null, null, 'YouTube', null, ${sqlStringLiteral(n.sys_origin_youtube_social)}),
+-- TikTok hosts (www.tiktok.com and any other *.tiktok.com) before Referral.
+-- The bare token tiktok is a separate rule and requires medium=social.
+('sys_origin_tiktok_referrer', 1234, true, true, 'origin', 'both', true, '(?i)^([a-z0-9-]+[.])*tiktok[.]com$', null, null, null, null, null, null, null, null, null, 'TikTok', null, ${sqlStringLiteral(n.sys_origin_tiktok_referrer)}),
+('sys_origin_tiktok_social', 1235, true, true, 'origin', 'both', true, '(?i)^tiktok$', '(?i)^social$', null, null, null, null, null, null, null, null, 'TikTok', null, ${sqlStringLiteral(n.sys_origin_tiktok_social)}),
+('sys_origin_linkedin_social', 1236, true, true, 'origin', 'both', true, '(?i)^linkedin$', '(?i)^social$', null, null, null, null, null, null, null, null, 'LinkedIn', null, ${sqlStringLiteral(n.sys_origin_linkedin_social)}),
+('sys_origin_pinterest_social', 1237, true, true, 'origin', 'both', true, '(?i)^pinterest$', '(?i)^social$', null, null, null, null, null, null, null, null, 'Pinterest', null, ${sqlStringLiteral(n.sys_origin_pinterest_social)}),
+('sys_origin_instagram_referrer', 1240, true, true, 'origin', 'both', true, '(?i)^(instagram[.]com|l[.]instagram[.]com|www[.]instagram[.]com|com[.]instagram[.]android)$', null, null, null, null, null, null, null, null, null, 'Instagram', null, ${sqlStringLiteral(n.sys_origin_instagram_referrer)}),
+('sys_origin_instagram_social', 1241, true, true, 'origin', 'both', true, '(?i)^instagram$', '(?i)^social$', null, null, null, null, null, null, null, null, 'Instagram', null, ${sqlStringLiteral(n.sys_origin_instagram_social)}),
+('sys_origin_facebook_referrer', 1250, true, true, 'origin', 'both', true, '(?i)^(facebook[.]com|m[.]facebook[.]com|l[.]facebook[.]com|lm[.]facebook[.]com|www[.]facebook[.]com)$', null, null, null, null, null, null, null, null, null, 'Facebook', null, ${sqlStringLiteral(n.sys_origin_facebook_referrer)}),
+('sys_origin_facebook_social', 1251, true, true, 'origin', 'both', true, '(?i)^facebook$', '(?i)^social$', null, null, null, null, null, null, null, null, 'Facebook', null, ${sqlStringLiteral(n.sys_origin_facebook_social)}),
+('sys_origin_threads_referrer', 1255, true, true, 'origin', 'both', true, '(?i)^l[.]threads[.]com$', null, null, null, null, null, null, null, null, null, 'Threads', null, ${sqlStringLiteral(n.sys_origin_threads_referrer)}),
+('sys_origin_threads_social', 1256, true, true, 'origin', 'both', true, '(?i)^threads$', '(?i)^social$', null, null, null, null, null, null, null, null, 'Threads', null, ${sqlStringLiteral(n.sys_origin_threads_social)}),
+('sys_origin_google_business', 1258, true, true, 'origin', 'both', true, '(?i)^google_business_profile$', '(?i)^referral$', null, null, null, null, null, null, null, null, 'Google Business', null, ${sqlStringLiteral(n.sys_origin_google_business)}),
 -- Origin stage: referral medium on visits only (web and synthetic).
 -- After the named referrer origins above, so Instagram / Facebook /
 -- Telegram / Google keep their own origin. An unrecognized referring
@@ -306,14 +351,18 @@ values
 -- fallback if this rule is missing.
 ('sys_origin_unknown', 1310, true, true, 'origin', 'both', true, '^$', null, null, null, null, null, null, null, null, null, 'Unknown', null, ${sqlStringLiteral(n.sys_origin_unknown)}),
 -- Channel stage: resolved from traffic_origin ((?i) — origins are Title Case)
-('sys_channel_paid_social', 2000, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^(meta ads|tiktok ads|linkedin ads|instagram direct)$', null, null, null, null, null, null, 'Paid Social', ${sqlStringLiteral(n.sys_channel_paid_social)}),
-('sys_channel_paid_search', 2010, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^(google ads|bing ads)$', null, null, null, null, null, null, 'Paid Search', ${sqlStringLiteral(n.sys_channel_paid_search)}),
+('sys_channel_paid_social', 2000, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^(meta ads|tiktok ads|linkedin ads|pinterest ads|telegram ads|instagram direct)$', null, null, null, null, null, null, 'Paid Social', ${sqlStringLiteral(n.sys_channel_paid_social)}),
+('sys_channel_paid_search', 2010, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^(google ads|bing ads|microsoft ads)$', null, null, null, null, null, null, 'Paid Search', ${sqlStringLiteral(n.sys_channel_paid_search)}),
 ('sys_channel_ai_assistants', 2015, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^chatgpt$', null, null, null, null, null, null, 'AI Assistants', ${sqlStringLiteral(n.sys_channel_ai_assistants)}),
 ('sys_channel_organic_search', 2020, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^(google|bing|yandex|duckduckgo)$', null, null, null, null, null, null, 'Organic Search', ${sqlStringLiteral(n.sys_channel_organic_search)}),
-('sys_channel_messenger', 2030, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^(telegram|whatsapp|viber)$', null, null, null, null, null, null, 'Messenger', ${sqlStringLiteral(n.sys_channel_messenger)}),
+-- Messenger only when the visit is a referral, a chat, or has no medium.
+-- medium=social (a Telegram channel feed) falls through to Organic Social
+-- while traffic_origin stays Telegram.
+('sys_channel_messenger', 2030, true, true, 'channel', 'both', true, null, '(?i)^(referral|messaging|[(]not set[)]|[(]none[)]|)$', null, null, '(?i)^(telegram|whatsapp|viber)$', null, null, null, null, null, null, 'Messenger', ${sqlStringLiteral(n.sys_channel_messenger)}),
+('sys_channel_messaging', 2035, true, true, 'channel', 'both', true, null, '(?i)^messaging$', null, null, null, null, null, null, null, null, null, 'Messenger', ${sqlStringLiteral(n.sys_channel_messaging)}),
 ('sys_channel_email', 2040, true, true, 'channel', 'both', true, null, '(?i)^(email|e-mail|e_mail|newsletter)$', null, null, null, null, null, null, null, null, null, 'Email', ${sqlStringLiteral(n.sys_channel_email)}),
 ('sys_channel_organic_social_medium', 2050, true, true, 'channel', 'both', true, null, '(?i)^(social|organic_social|social_organic|organicsocial)$', null, null, null, null, null, null, null, null, null, 'Organic Social', ${sqlStringLiteral(n.sys_channel_organic_social_medium)}),
-('sys_channel_organic_social_origin', 2060, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^(instagram|facebook|youtube)$', null, null, null, null, null, null, 'Organic Social', ${sqlStringLiteral(n.sys_channel_organic_social_origin)}),
+('sys_channel_organic_social_origin', 2060, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^(instagram|facebook|youtube|tiktok|linkedin|pinterest|telegram)$', null, null, null, null, null, null, 'Organic Social', ${sqlStringLiteral(n.sys_channel_organic_social_origin)}),
 ('sys_channel_organic_social_threads', 2065, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^threads$', null, null, null, null, null, null, 'Organic Social', ${sqlStringLiteral(n.sys_channel_organic_social_threads)}),
 ('sys_channel_referral', 2070, true, true, 'channel', 'both', true, null, '(?i)^referral$', null, null, null, null, null, null, null, null, null, 'Referral', ${sqlStringLiteral(n.sys_channel_referral)}),
 ('sys_channel_direct', 2080, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^direct$', null, null, null, null, null, null, 'Direct', ${sqlStringLiteral(n.sys_channel_direct)});
