@@ -133,6 +133,12 @@ export async function getAttributionJobStatus(projectId: number): Promise<IAttri
  * If the scheduled query is not registered, refuses with
  * ATTRIBUTION_JOB_NOT_CONFIGURED (does not create one). If a run is already
  * PENDING or RUNNING, refuses with ATTRIBUTION_JOB_ALREADY_RUNNING.
+ *
+ * After a successful start we return immediately (202 Accepted shape from the
+ * controller) without a second Google status round-trip. Re-reading
+ * getTransferConfig + listTransferRuns after start can take ~35s on heavy
+ * projects and push the handler past the gateway ~60s timeout. Clients poll
+ * GET attribution-job/status for live last_run_at / health.
  */
 export async function runAttributionJob(projectId: number): Promise<IAttributionJobRunResult> {
   const { session, name } = await requireScheduledQueryName(projectId)
@@ -144,12 +150,15 @@ export async function runAttributionJob(projectId: number): Promise<IAttribution
 
   await session.bigqueryApi.startScheduledQueryManualRun(name)
 
-  // Re-read after start so last_run_at / status reflect what Google reports.
-  const live = await readLiveStatus(projectId, session, name)
-
+  // Keep the pre-start isScheduledQueryRunActive guard: code/comments do not
+  // prove startManualTransferRuns rejects overlapping PENDING/RUNNING runs.
+  // Skip post-start readLiveStatus — no extra listTransferRuns / getTransferConfig.
   return {
-    ...live,
+    project_id: projectId,
     running: true,
+    last_run_at: null,
+    status: 'ACTIVE',
+    configured: true,
     started: true,
   }
 }
