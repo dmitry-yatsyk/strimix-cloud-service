@@ -106,6 +106,10 @@ export const ATTRIBUTION_SIGNAL_MAPPINGS_TABLE_ID = 'attribution_signal_mappings
  *    signal wins last-click attribution for that conversion)
  */
 export const ATTRIBUTION_SIGNAL_MAPPINGS_TABLE_SCHEMA = [
+  // Short display label for the UI. Optional. The attribution job never reads it.
+  { name: 'name', type: 'STRING' },
+  // Operator note. The attribution job never reads it.
+  { name: 'description', type: 'STRING' },
   { name: 'mapping_id', type: 'STRING', mode: 'REQUIRED' },
   { name: 'priority', type: 'INTEGER', mode: 'REQUIRED' },
   { name: 'is_active', type: 'BOOLEAN', mode: 'REQUIRED' },
@@ -158,8 +162,4 @@ export const ATTRIBUTION_SIGNAL_MAPPINGS_TABLE_SCHEMA = [
   { name: 'data_source_regex', type: 'STRING' },
   { name: 'event_name', type: 'STRING' }, // optional condition: only events with this name
   { name: 'mode', type: 'STRING', mode: 'REQUIRED' }, // 'fallback' | 'override'
-  // Short display label for the UI. Optional. The attribution job never reads it.
-  { name: 'name', type: 'STRING' },
-  // Operator note. The attribution job never reads it.
-  { name: 'description', type: 'STRING' },
 ]

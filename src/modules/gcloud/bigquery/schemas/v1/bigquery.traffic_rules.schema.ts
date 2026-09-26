@@ -59,6 +59,11 @@ export const TRAFFIC_RULES_TABLE_ID = 'traffic_rules'
  * priority < 1000 to win over system defaults.
  */
 export const TRAFFIC_RULES_TABLE_SCHEMA = [
+  // Short display label for the UI. Optional for custom rules; system seeds
+  // always carry one. The attribution job never reads it.
+  { name: 'name', type: 'STRING' },
+  // Operator note. The attribution job never reads it.
+  { name: 'description', type: 'STRING' },
   { name: 'rule_id', type: 'STRING', mode: 'REQUIRED' },
   { name: 'priority', type: 'INTEGER', mode: 'REQUIRED' },
   { name: 'is_active', type: 'BOOLEAN', mode: 'REQUIRED' },
@@ -106,11 +111,6 @@ export const TRAFFIC_RULES_TABLE_SCHEMA = [
   // 'origin' / 'channel' stage rules fill the classification columns
   { name: 'set_traffic_origin', type: 'STRING' },
   { name: 'set_traffic_channel', type: 'STRING' },
-  // Short display label for the UI. Optional for custom rules; system seeds
-  // always carry one. The attribution job never reads it.
-  { name: 'name', type: 'STRING' },
-  // Operator note. The attribution job never reads it.
-  { name: 'description', type: 'STRING' },
 ]
 
 /**

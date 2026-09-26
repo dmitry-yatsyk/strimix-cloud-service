@@ -1260,6 +1260,8 @@ declare query_template string;
 set query_template = """
 create table if not exists `<project_name>.<dataset_name>.traffic_rules`
 (
+  name                  string,  -- коротка підпис для UI, джоба не читає
+  description           string,  -- заметка оператора, джоба її не читає
   rule_id               string not null,
   priority              int64  not null,
   is_active             bool   not null,
@@ -1291,9 +1293,7 @@ create table if not exists `<project_name>.<dataset_name>.traffic_rules`
   set_term              string,
   set_strimix_refid     string,
   set_traffic_origin    string,
-  set_traffic_channel   string,
-  name                  string,  -- коротка підпис для UI, джоба не читає
-  description           string   -- заметка оператора, джоба її не читає
+  set_traffic_channel   string
 )""";
 
 set query = replace(query_template, '<project_name>', _project_name);
@@ -1324,6 +1324,8 @@ execute immediate (query);
 set query_template = """
 create table if not exists `<project_name>.<dataset_name>.attribution_signal_mappings`
 (
+  name                    string,          -- коротка підпис для UI, джоба не читає
+  description             string,          -- заметка оператора, джоба её не читает
   mapping_id              string not null,
   priority                int64  not null,
   is_active               bool   not null,
@@ -1375,9 +1377,7 @@ create table if not exists `<project_name>.<dataset_name>.attribution_signal_map
   -- названиям от кросс-сетевых тёзок. Null значит «все сети».
   data_source_regex       string,
   event_name              string,          -- опционально: только события с этим именем
-  mode                    string not null, -- 'fallback' | 'override'
-  name                    string,          -- коротка підпис для UI, джоба не читає
-  description             string           -- заметка оператора, джоба её не читает
+  mode                    string not null  -- 'fallback' | 'override'
 )""";
 
 set query = replace(query_template, '<project_name>', _project_name);
