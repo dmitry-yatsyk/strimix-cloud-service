@@ -84,13 +84,16 @@ async function readLiveStatus(
   session: Awaited<ReturnType<typeof openTrafficSettingsSession>>,
   name: string,
 ): Promise<IAttributionJobStatus> {
-  const config = await session.bigqueryApi.getScheduledQuery(name)
+  const [config, runStatus] = await Promise.all([
+    session.bigqueryApi.getScheduledQuery(name, { statusFieldsOnly: true }),
+    session.bigqueryApi.getScheduledQueryRunStatus(name),
+  ])
+
   if (!config) {
     return notConfiguredStatus(projectId)
   }
 
-  const { running, last_run_at, latest_run_state } =
-    await session.bigqueryApi.getScheduledQueryRunStatus(name)
+  const { running, last_run_at, latest_run_state } = runStatus
 
   return {
     project_id: projectId,

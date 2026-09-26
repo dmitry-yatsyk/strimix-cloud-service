@@ -14,6 +14,11 @@ import type {
 } from '../bigquery.interface'
 import type { CredentialBody } from 'google-auth-library'
 import { DataTransferServiceClient, protos } from '@google-cloud/bigquery-data-transfer'
+import {
+  hasActiveTransferRun,
+  pickLatestTransferRun,
+  TRANSFER_RUNS_STATUS_PAGE_SIZE,
+} from './transfer-run-status'
 
 type TransferStateEnum = typeof protos.google.cloud.bigquery.datatransfer.v1.TransferState
 type ITransferRun = protos.google.cloud.bigquery.datatransfer.v1.ITransferRun
@@ -335,8 +340,16 @@ export class BigQueryApi {
    * Reads the query text and the settings of an existing transfer config.
    * The migration needs them to update only the SQL while preserving schedule,
    * destination dataset, service account and enabled/disabled state.
+   *
+   * Pass `statusFieldsOnly: true` for attribution job status/health: GetTransferConfig
+   * has no request read_mask, so we send the X-Goog-FieldMask system parameter via
+   * gax CallOptions and omit `params` (the attribution SQL body). Migration keeps
+   * the default full read.
    */
-  public async getScheduledQuery(name: string): Promise<{
+  public async getScheduledQuery(
+    name: string,
+    options?: { statusFieldsOnly?: boolean },
+  ): Promise<{
     name: string
     displayName: string | null
     query: string | null
@@ -352,12 +365,27 @@ export class BigQueryApi {
     state: number | null
     serviceAccountName: string | null
   } | null> {
-    const [config] = await this.bqTransfer.getTransferConfig({ name })
+    // Health mapping only needs name/state/disabled/scheduleOptions.disableAutoScheduling.
+    // Without a mask Google returns the full TransferConfig, including params.query.
+    const callOptions = options?.statusFieldsOnly
+      ? {
+          otherArgs: {
+            headers: {
+              'x-goog-fieldmask':
+                'name,state,disabled,scheduleOptions.disableAutoScheduling',
+            },
+          },
+        }
+      : undefined
+
+    const [config] = await this.bqTransfer.getTransferConfig({ name }, callOptions)
     if (!config) {
       return null
     }
 
-    const queryValue = config.params?.fields?.query?.stringValue
+    const queryValue = options?.statusFieldsOnly
+      ? null
+      : config.params?.fields?.query?.stringValue
     const rawState = config.state
 
     return {
@@ -480,6 +508,10 @@ export class BigQueryApi {
    * Live run status for a scheduled query (transfer config), read from Google
    * Cloud Data Transfer — never from Mongo.
    *
+   * Single unfiltered listTransferRuns (pageSize 10): derive `running` from any
+   * PENDING/RUNNING in the page, and `last_run_at` / `latest_run_state` from the
+   * newest run by startTime (proto does not guarantee list order).
+   *
    * - `running`: true when any PENDING or RUNNING transfer run exists.
    * - `last_run_at`: ISO-8601 of the newest run by start time. Prefers end
    *   time when that run SUCCEEDED; otherwise start time. Null when there
@@ -493,20 +525,13 @@ export class BigQueryApi {
   }> {
     const TransferState = protos.google.cloud.bigquery.datatransfer.v1.TransferState
 
-    const [activeRuns] = await this.bqTransfer.listTransferRuns({
+    const [runs] = await this.bqTransfer.listTransferRuns({
       parent: name,
-      states: [TransferState.PENDING, TransferState.RUNNING],
-      pageSize: 1,
+      pageSize: TRANSFER_RUNS_STATUS_PAGE_SIZE,
     })
-    const running = Array.isArray(activeRuns) && activeRuns.length > 0
-
-    // listTransferRuns returns runs newest-first by start time when unordered.
-    const [latestRuns] = await this.bqTransfer.listTransferRuns({
-      parent: name,
-      pageSize: 1,
-    })
-    const latest =
-      Array.isArray(latestRuns) && latestRuns.length > 0 ? latestRuns[0] : null
+    const list = Array.isArray(runs) ? runs : []
+    const running = hasActiveTransferRun(list)
+    const latest = pickLatestTransferRun(list)
     const rawLatestState = latest?.state
 
     return {
