@@ -126,6 +126,7 @@ export const SYSTEM_TRAFFIC_RULE_NAMES: Readonly<Record<string, string>> = {
   sys_origin_meta_ads: 'Meta Ads',
   sys_origin_tiktok_ads: 'TikTok Ads',
   sys_origin_linkedin_ads: 'LinkedIn Ads',
+  sys_origin_referral: 'Referral',
   sys_origin_meta_ads_network: 'Meta Ads from network',
   sys_origin_google_ads_network: 'Google Ads from network',
   sys_origin_tiktok_ads_network: 'TikTok Ads from network',
@@ -232,6 +233,11 @@ export function systemTrafficRuleNamesBackfillPendingPredicate(): string {
  *    both pipelines produce labels by the same convention.
  *  - origin by network name: catches labels produced by the projection pair
  *    (source = '{data_source}' -> 'FACEBOOK_ADS' etc.)
+ *  - origin referral: medium = referral on any visit (web and synthetic)
+ *    sets traffic_origin to Referral. Ad costs are not targeted. Priority
+ *    is after the named referrer origins (Google, Instagram, Telegram, …),
+ *    so those keep their own origin and only an unrecognized referring
+ *    site falls through to Referral.
  *  - origin of unlabeled ad costs: when all five canonical labels are empty,
  *    an ad_cost row is still classified by its data_source (FACEBOOK_ADS,
  *    GOOGLE_ADS, TIKTOK_ADS). Visits are not targeted: an empty visit does
@@ -263,7 +269,7 @@ values
 -- Origin stage: paid sources by utm labels ((?i) — catch Facebook/FACEBOOK/…)
 ('sys_origin_google_ads', 1000, true, true, 'origin', 'both', true, '(?i)^(google|adwords|google[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_search|paidsearch)$', null, null, null, null, null, null, null, null, 'Google Ads', null, ${sqlStringLiteral(n.sys_origin_google_ads)}),
 ('sys_origin_bing_ads', 1010, true, true, 'origin', 'both', true, '(?i)^(bing|bing[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_search|paidsearch)$', null, null, null, null, null, null, null, null, 'Bing Ads', null, ${sqlStringLiteral(n.sys_origin_bing_ads)}),
-('sys_origin_meta_ads', 1020, true, true, 'origin', 'both', true, '(?i)^(fb|facebook|meta|ig|instagram|facebook[ _-]?ads|meta[ _-]?ads|an|msg)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'Meta Ads', null, ${sqlStringLiteral(n.sys_origin_meta_ads)}),
+('sys_origin_meta_ads', 1020, true, true, 'origin', 'both', true, '(?i)^(fb|facebook|meta|ig|th|instagram|facebook[ _-]?ads|meta[ _-]?ads|an|msg)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'Meta Ads', null, ${sqlStringLiteral(n.sys_origin_meta_ads)}),
 ('sys_origin_tiktok_ads', 1030, true, true, 'origin', 'both', true, '(?i)^(tiktok|tt|tiktok[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'TikTok Ads', null, ${sqlStringLiteral(n.sys_origin_tiktok_ads)}),
 ('sys_origin_linkedin_ads', 1040, true, true, 'origin', 'both', true, '(?i)^(linkedin|li|linkedin[ _-]?ads)$', '(?i)^(cpc|ppc|paid|paid_social|paidsocial|social_paid)$', null, null, null, null, null, null, null, null, 'LinkedIn Ads', null, ${sqlStringLiteral(n.sys_origin_linkedin_ads)}),
 -- Origin stage: paid sources by network name in source (labels produced by
@@ -287,6 +293,11 @@ values
 ('sys_origin_instagram', 1240, true, true, 'origin', 'both', true, '(?i)^(instagram[.]com|l[.]instagram[.]com|www[.]instagram[.]com|com[.]instagram[.]android)$', null, null, null, null, null, null, null, null, null, 'Instagram', null, ${sqlStringLiteral(n.sys_origin_instagram)}),
 ('sys_origin_facebook', 1250, true, true, 'origin', 'both', true, '(?i)^(facebook[.]com|m[.]facebook[.]com|l[.]facebook[.]com|lm[.]facebook[.]com|www[.]facebook[.]com)$', null, null, null, null, null, null, null, null, null, 'Facebook', null, ${sqlStringLiteral(n.sys_origin_facebook)}),
 ('sys_origin_threads', 1255, true, true, 'origin', 'both', true, '(?i)^l[.]threads[.]com$', null, null, null, null, null, null, null, null, null, 'Threads', null, ${sqlStringLiteral(n.sys_origin_threads)}),
+-- Origin stage: referral medium on visits only (web and synthetic).
+-- After the named referrer origins above, so Instagram / Facebook /
+-- Telegram / Google keep their own origin. An unrecognized referring
+-- site falls through to Referral, before Direct and Unknown.
+('sys_origin_referral', 1260, true, true, 'origin', 'visit', true, null, '(?i)^referral$', null, null, null, null, null, null, null, null, 'Referral', null, ${sqlStringLiteral(n.sys_origin_referral)}),
 -- Origin stage: direct (exact marker)
 ('sys_origin_direct', 1300, true, true, 'origin', 'both', true, '^[(]direct[)]$', null, null, null, null, null, null, null, null, null, 'Direct', null, ${sqlStringLiteral(n.sys_origin_direct)}),
 -- Origin stage: empty/null source → Unknown. Job conditions match via
