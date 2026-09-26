@@ -129,6 +129,9 @@ export const SYSTEM_TRAFFIC_RULE_NAMES: Readonly<Record<string, string>> = {
   sys_origin_meta_ads_network: 'Meta Ads from network',
   sys_origin_google_ads_network: 'Google Ads from network',
   sys_origin_tiktok_ads_network: 'TikTok Ads from network',
+  sys_origin_meta_ads_unlabeled: 'Meta Ads without UTM marks',
+  sys_origin_google_ads_unlabeled: 'Google Ads without UTM marks',
+  sys_origin_tiktok_ads_unlabeled: 'TikTok Ads without UTM marks',
   sys_origin_google: 'Google',
   sys_origin_bing: 'Bing',
   sys_origin_yandex: 'Yandex',
@@ -206,9 +209,7 @@ set name = case rule_id
   end
 where is_system = true
   and (name is null or name = '' or name in (${legacyNames}))
-  and rule_id in (${Object.keys(SYSTEM_TRAFFIC_RULE_NAMES)
-    .map(sqlStringLiteral)
-    .join(', ')})`
+  and rule_id in (${Object.keys(SYSTEM_TRAFFIC_RULE_NAMES).map(sqlStringLiteral).join(', ')})`
 }
 
 /** WHERE predicate shared by the backfill UPDATE and its pending-row count. */
@@ -216,9 +217,7 @@ export function systemTrafficRuleNamesBackfillPendingPredicate(): string {
   const legacyNames = LEGACY_UKRAINIAN_TRAFFIC_RULE_NAMES.map(sqlStringLiteral).join(', ')
   return `is_system = true
   and (name is null or name = '' or name in (${legacyNames}))
-  and rule_id in (${Object.keys(SYSTEM_TRAFFIC_RULE_NAMES)
-    .map(sqlStringLiteral)
-    .join(', ')})`
+  and rule_id in (${Object.keys(SYSTEM_TRAFFIC_RULE_NAMES).map(sqlStringLiteral).join(', ')})`
 }
 
 /**
@@ -233,6 +232,11 @@ export function systemTrafficRuleNamesBackfillPendingPredicate(): string {
  *    both pipelines produce labels by the same convention.
  *  - origin by network name: catches labels produced by the projection pair
  *    (source = '{data_source}' -> 'FACEBOOK_ADS' etc.)
+ *  - origin of unlabeled ad costs: when all five canonical labels are empty,
+ *    an ad_cost row is still classified by its data_source (FACEBOOK_ADS,
+ *    GOOGLE_ADS, TIKTOK_ADS). Visits are not targeted: an empty visit does
+ *    not say which network it came from. These rules exist so spend with
+ *    no site visits still shows a network in reports instead of Unknown.
  *  - AI assistants (official UTM only): ChatGPT — OpenAI documents
  *    utm_source=chatgpt.com on citation links → origin ChatGPT, channel
  *    AI Assistants. Other AI platforms omitted until vendor documents UTM.
@@ -301,5 +305,17 @@ values
 ('sys_channel_organic_social_origin', 2060, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^(instagram|facebook|youtube)$', null, null, null, null, null, null, 'Organic Social', ${sqlStringLiteral(n.sys_channel_organic_social_origin)}),
 ('sys_channel_organic_social_threads', 2065, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^threads$', null, null, null, null, null, null, 'Organic Social', ${sqlStringLiteral(n.sys_channel_organic_social_threads)}),
 ('sys_channel_referral', 2070, true, true, 'channel', 'both', true, null, '(?i)^referral$', null, null, null, null, null, null, null, null, null, 'Referral', ${sqlStringLiteral(n.sys_channel_referral)}),
-('sys_channel_direct', 2080, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^direct$', null, null, null, null, null, null, 'Direct', ${sqlStringLiteral(n.sys_channel_direct)})`
+('sys_channel_direct', 2080, true, true, 'channel', 'both', true, null, null, null, null, '(?i)^direct$', null, null, null, null, null, null, 'Direct', ${sqlStringLiteral(n.sys_channel_direct)});
+
+-- Origin of ad costs whose five canonical labels are still empty. Priority
+-- sits before sys_origin_unknown (1310) so a known network wins over Unknown.
+-- target='ad_cost' only: a visit with empty labels does not identify a network.
+-- data_source_regex is the exact connector literal; the job matches it with
+-- regexp_contains, and the API allowlist stores the same literal.
+insert into \`${projectId}.${datasetId}.${TRAFFIC_RULES_TABLE_ID}\`
+(rule_id, priority, is_active, is_system, stage, target, applies_to_web, source_regex, medium_regex, campaign_regex, content_regex, term_regex, data_source_regex, set_traffic_origin, name)
+values
+('sys_origin_meta_ads_unlabeled', 1290, true, true, 'origin', 'ad_cost', false, '^$', '^$', '^$', '^$', '^$', 'FACEBOOK_ADS', 'Meta Ads', ${sqlStringLiteral(n.sys_origin_meta_ads_unlabeled)}),
+('sys_origin_google_ads_unlabeled', 1292, true, true, 'origin', 'ad_cost', false, '^$', '^$', '^$', '^$', '^$', 'GOOGLE_ADS', 'Google Ads', ${sqlStringLiteral(n.sys_origin_google_ads_unlabeled)}),
+('sys_origin_tiktok_ads_unlabeled', 1294, true, true, 'origin', 'ad_cost', false, '^$', '^$', '^$', '^$', '^$', 'TIKTOK_ADS', 'TikTok Ads', ${sqlStringLiteral(n.sys_origin_tiktok_ads_unlabeled)})`
 }
