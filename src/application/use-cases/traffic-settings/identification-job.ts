@@ -15,7 +15,7 @@ import { TrafficSettingsError } from '@modules/traffic-settings'
  * Cloud Run Job module does. CMS may update `status` to ACTIVE or PAUSED.
  *
  * Manual start calls Cloud Run Jobs API `runJob` (`:run`) with a per-execution
- * PROJECT_ID container env override — it does not mutate the job template.
+ * ACTIVE_PROJECT_ID container env override — it does not mutate the job template.
  *
  * These endpoints NEVER create an `identification_jobs` document, Cloud Run
  * Job, or project_resources row. Provisioning belongs only to

@@ -17,7 +17,7 @@ import { HttpException } from '@presentation/exceptions/http.exception'
  * `identification_jobs` document id, not a GCP resource.
  *
  * Per-execution: Strimix project id is passed via
- * `overrides.containerOverrides.env` (PROJECT_ID). The job template env used
+ * `overrides.containerOverrides.env` (ACTIVE_PROJECT_ID). The job template env used
  * by the hourly schedule is never PATCHed.
  *
  * API: POST https://run.googleapis.com/v2/{name}:run
@@ -25,7 +25,7 @@ import { HttpException } from '@presentation/exceptions/http.exception'
  */
 
 /** Env key the identity container uses for the Strimix project id. */
-const PROJECT_ID_ENV_KEY = 'PROJECT_ID'
+const ACTIVE_PROJECT_ID_ENV_KEY = 'ACTIVE_PROJECT_ID'
 
 const JOB_RESOURCE_NAME =
   /^projects\/[a-z0-9-]+\/locations\/[a-z0-9-]+\/jobs\/[a-zA-Z0-9_-]+$/
@@ -65,7 +65,7 @@ function readRunnerCredentials(): CredentialBody {
 
 /**
  * Triggers `jobs.run` on the shared identity Cloud Run Job with a per-execution
- * PROJECT_ID override for this Strimix project.
+ * ACTIVE_PROJECT_ID override for this Strimix project.
  */
 export async function runIdentificationCloudRunJob(projectId: number): Promise<void> {
   const jobName = readCloudRunJobName()
@@ -85,7 +85,7 @@ export async function runIdentificationCloudRunJob(projectId: number): Promise<v
         overrides: {
           containerOverrides: [
             {
-              env: [{ name: PROJECT_ID_ENV_KEY, value: String(projectId) }],
+              env: [{ name: ACTIVE_PROJECT_ID_ENV_KEY, value: String(projectId) }],
             },
           ],
         },
