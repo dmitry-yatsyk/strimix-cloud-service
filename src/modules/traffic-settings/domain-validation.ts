@@ -632,6 +632,29 @@ export function validateAttributionSignalMappingInput(
     }
   }
 
+  // The synthetic visit is anchored on the matched event via visits.first_event_id,
+  // and a page_view already opens a web visit. Without a concrete non-page_view
+  // event name one event could anchor two visits and be duplicated downstream.
+  if (item.entity === 'event') {
+    if (item.event_name === null || item.event_name.trim() === '') {
+      errors.push(
+        error(
+          'event_name',
+          'EVENT_NAME_REQUIRED_FOR_EVENT_ENTITY',
+          'The event entity requires an event name, otherwise every event, including page views, would create a synthetic visit',
+        ),
+      )
+    } else if (item.event_name === 'page_view') {
+      errors.push(
+        error(
+          'event_name',
+          'PAGE_VIEW_NOT_ALLOWED_FOR_EVENT_ENTITY',
+          'Page views already form web visits and cannot anchor a synthetic visit',
+        ),
+      )
+    }
+  }
+
   if (item.event_name !== null && item.entity !== 'event') {
     warnings.push(
       error(

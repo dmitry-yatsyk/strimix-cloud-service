@@ -39,7 +39,7 @@ export function buildExcludedUrlParamsSeedQuery(projectId: string, datasetId: st
 values
 ('sys_utm', 'utm_[a-z]+', true, true, 'Standard UTM tracking params (utm_source, utm_medium, utm_campaign, utm_content, utm_term, utm_id...)'),
 ('sys_strimix_refid', 'strimix_refid', true, true, 'Strimix ad-matching tracking param (matched via the strimix_refid column, not via landing_page)'),
-('sys_google_ads', 'gclid|gclsrc|dclid|gbraid|wbraid', true, true, 'Google Ads click ids'),
+('sys_google_ads', 'gclid|gclsrc|dclid|gbraid|wbraid|gad_campaignid|gad_source', true, true, 'Google Ads click ids'),
 ('sys_google_merchant', 'srsltid', true, true, 'Google Merchant Center auto-tagging id (appended in Search/Shopping results for conversion tracking)'),
 ('sys_google_tag_manager', 'gtm_latency|gtm_debug', true, true, 'Google Tag Manager diagnostic/debug params (appended by GTM tooling / GoogleOther crawler, not content-routing)'),
 ('sys_google_analytics', '_ga|_gl', true, true, 'Google Analytics cross-domain linker params'),

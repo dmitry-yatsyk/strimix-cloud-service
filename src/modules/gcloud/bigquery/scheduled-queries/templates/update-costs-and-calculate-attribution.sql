@@ -86,10 +86,19 @@ ordered_match_keys as (
   select row_number() over (partition by ad_id, date order by inserted_at asc) row_number, * from source_match_keys
 ), 
 
+-- Самая свежая выгрузка объявления за день: источник метрик, названий и id.
+-- Сеть корректирует расходы прошлых дней задним числом, поэтому метрики
+-- всегда берём из последней выгрузки, даже если UTM с тех пор сменились.
+latest_download_rows as (
+  select * from ordered_match_keys
+  qualify row_number = max(row_number) over (partition by ad_id, date)
+),
+
 -- Находим объявления, у которых UTM сменились между выгрузками.
 -- Нужно, чтобы не задваивать расходы: если объявление сначала выгрузилось
 -- с UTM A, а потом пользователь сменил UTM на B, расход должен остаться
--- один раз (привязанным к актуальной метке).
+-- один раз и с первой версией меток за эту дату (A): визиты этой даты
+-- пришли с метками A, и матчинг расходов с визитами идёт по ним.
 find_ads_with_changed_utms as (
   select
     case when
@@ -107,8 +116,8 @@ ads_with_changed_utms as (
   where primary_utm_row_number is not null
 ),
 
--- Для объявлений со сменившимися UTM определяем номер строки, из которой
--- ниже брать метрики (cost/impressions/...), чтобы подтянуть их к актуальным UTM.
+-- Для объявлений со сменившимися UTM определяем последнюю строку первой
+-- версии меток: из неё ниже берутся метки, landing_page_url и url_params.
 ads_with_changed_utms_filtered as (
   select 
     first_value(primary_utm_row_number) over(partition by ad_id, date order by primary_utm_row_number asc) last_row,
@@ -130,25 +139,25 @@ latest_matched_rows as (
       (select i.last_row from ads_with_changed_utms_grouped i where i.match_key = t1.match_key),
       if((select i.last_row from ads_with_changed_utms_grouped i where i.date = t1.date and i.ad_id = t1.ad_id) is null, max(row_number) over(partition by date, ad_id), null)
     ) last_row,
-    * except(row_number, inserted_at, timezone, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay) 
+    * except(row_number, inserted_at, timezone, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay, campaign_id, campaign_name, adset_id, adset_name, ad_name, ad_destination) 
   from ordered_match_keys t1
 ),
 
--- Схлопываем выбранные строки-источники в уникальные группы по match_key
--- и выбранным полям объявления.
+-- Схлопываем выбранные строки-источники в уникальные группы по match_key.
+-- Группируем только по полям, входящим в match_key: названия и id сети
+-- могут меняться между выгрузками одного объявления за день, и группировка
+-- по ним размножила бы строку-источник метрик (дубль расходов).
 latest_matched_rows_grouped as (
   select * from latest_matched_rows
   where last_row is not null
-  group by match_key, date, ad_account_id, source, medium, campaign, content, term, strimix_refid, last_row, campaign_id, campaign_name, adset_id, adset_name, ad_id, ad_name, ad_destination
+  group by match_key, date, ad_account_id, source, medium, campaign, content, term, strimix_refid, ad_id, last_row
 ),
 
--- Подставляем в расходы актуальные UTM: метки берём из сгруппированной
--- строки (после смены UTM), а cost/impressions и landing — из выбранной
--- выгрузки с номером last_row.
+-- Собираем строку расходов из двух выгрузок: метки берём из сгруппированной
+-- строки, landing_page_url и url_params — из выгрузки с номером last_row (первая версия
+-- меток за дату), а метрики, названия и id — из самой свежей выгрузки.
 rows_with_actual_utms as (
   select
-    b.row_number,
-    b.match_key,
     c.date, 
     c.source, 
     c.medium, 
@@ -157,30 +166,33 @@ rows_with_actual_utms as (
     c.term, 
     c.strimix_refid, 
     b.landing_page_url, 
+    b.url_params,
     cast(null as string) landing_hostname,
     cast(null as string) landing_page_path,
-    b.cost, 
-    b.currency, 
-    b.impressions, 
-    b.reach, 
-    b.clicks, 
-    b.click_delay, 
+    l.cost, 
+    l.currency, 
+    l.impressions, 
+    l.reach, 
+    l.clicks, 
+    l.click_delay, 
     'FACEBOOK_ADS' data_source,
-    c.ad_destination,
-    c.campaign_id,
-    c.campaign_name,
-    c.adset_id,
-    c.adset_name,
+    l.ad_destination,
+    l.campaign_id,
+    l.campaign_name,
+    l.adset_id,
+    l.adset_name,
     c.ad_id,
-    c.ad_name
+    l.ad_name
   from latest_matched_rows_grouped c
   inner join ordered_match_keys b
   on b.row_number = c.last_row
   and b.match_key = c.match_key
+  inner join latest_download_rows l
+  on l.ad_id = c.ad_id
+  and l.date = c.date
 ), 
 
--- Дополняем расходы актуальными url_params из исходной выгрузки
--- (join по row_number и match_key).
+-- Приводим строку расходов к итоговому набору колонок ad_costs.
 ad_costs as (
   select 
     d.date,
@@ -194,7 +206,7 @@ ad_costs as (
     d.landing_page_url,
     d.landing_hostname,
     d.landing_page_path,
-    b.url_params,
+    d.url_params,
     d.cost,
     d.currency,
     d.impressions,
@@ -210,9 +222,6 @@ ad_costs as (
     d.ad_id,
     d.ad_name
   from rows_with_actual_utms d
-  left join ordered_match_keys b
-  on b.row_number = d.row_number
-  and b.match_key = d.match_key
 )
 
 select * from ad_costs
@@ -345,10 +354,20 @@ ordered_match_keys as (
   select row_number() over (partition by ad_id, keyword, date order by inserted_at asc) row_number, * from source_match_keys
 ), 
 
+-- Самая свежая выгрузка пары «объявление × ключевое слово» за день:
+-- источник метрик, названий и id. Сеть корректирует расходы прошлых дней
+-- задним числом, поэтому метрики всегда берём из последней выгрузки, даже
+-- если UTM с тех пор сменились.
+latest_download_rows as (
+  select * from ordered_match_keys
+  qualify row_number = max(row_number) over (partition by ad_id, keyword, date)
+),
+
 -- Находим объявления, у которых UTM сменились между выгрузками.
 -- Нужно, чтобы не задваивать расходы: если объявление сначала выгрузилось
 -- с UTM A, а потом пользователь сменил UTM на B, расход должен остаться
--- один раз (привязанным к актуальной метке).
+-- один раз и с первой версией меток за эту дату (A): визиты этой даты
+-- пришли с метками A, и матчинг расходов с визитами идёт по ним.
 find_ads_with_changed_utms as (
   select
     case when
@@ -367,8 +386,8 @@ ads_with_changed_utms as (
   where primary_utm_row_number is not null
 ),
 
--- Для объявлений со сменившимися UTM определяем номер строки, из которой
--- ниже брать метрики (cost/impressions/...), чтобы подтянуть их к актуальным UTM.
+-- Для объявлений со сменившимися UTM определяем последнюю строку первой
+-- версии меток: из неё ниже берутся метки, landing_page_url и url_params.
 ads_with_changed_utms_filtered as (
   select 
     first_value(primary_utm_row_number) over(partition by ad_id, keyword, date order by primary_utm_row_number asc) last_row,
@@ -391,25 +410,25 @@ latest_matched_rows as (
       (select i.last_row from ads_with_changed_utms_grouped i where i.match_key = t1.match_key),
       if((select i.last_row from ads_with_changed_utms_grouped i where i.date = t1.date and i.ad_id = t1.ad_id and i.keyword = t1.keyword) is null, max(row_number) over(partition by date, ad_id, keyword), null)
     ) last_row,
-    * except(row_number, inserted_at, timezone, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay) 
+    * except(row_number, inserted_at, timezone, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay, campaign_id, campaign_name, adgroup_id, adgroup_name, ad_name, ad_destination) 
   from ordered_match_keys t1
 ),
 
--- Схлопываем выбранные строки-источники в уникальные группы по match_key
--- и размерным полям объявления.
+-- Схлопываем выбранные строки-источники в уникальные группы по match_key.
+-- Группируем только по полям, входящим в match_key: названия и id сети
+-- могут меняться между выгрузками одного объявления за день, и группировка
+-- по ним размножила бы строку-источник метрик (дубль расходов).
 latest_matched_rows_grouped as (
   select * from latest_matched_rows
   where last_row is not null
-  group by match_key, date, ad_account_id, source, medium, campaign, content, term, strimix_refid, last_row, campaign_id, campaign_name, adgroup_id, adgroup_name, ad_id, ad_name, keyword, ad_destination
+  group by match_key, date, ad_account_id, source, medium, campaign, content, term, strimix_refid, ad_id, keyword, last_row
 ),
 
--- Подставляем в расходы актуальные UTM: метки берём из сгруппированной
--- строки (после смены UTM), а cost/impressions и landing — из размерной
--- выгрузки с номером last_row.
+-- Собираем строку расходов из двух выгрузок: метки берём из сгруппированной
+-- строки, landing_page_url и url_params — из выгрузки с номером last_row (первая версия
+-- меток за дату), а метрики, названия и id — из самой свежей выгрузки.
 rows_with_actual_utms as (
   select
-    b.row_number,
-    b.match_key,
     c.date, 
     c.source, 
     c.medium, 
@@ -418,30 +437,36 @@ rows_with_actual_utms as (
     c.term, 
     c.strimix_refid, 
     b.landing_page_url, 
+    b.url_params,
     cast(null as string) landing_hostname,
     cast(null as string) landing_page_path,
-    b.cost, 
-    b.currency, 
-    b.impressions, 
-    b.reach, 
-    b.clicks, 
-    b.click_delay, 
+    l.cost, 
+    l.currency, 
+    l.impressions, 
+    l.reach, 
+    l.clicks, 
+    l.click_delay, 
     'GOOGLE_ADS' data_source,
-    c.ad_destination,
-    c.campaign_id,
-    c.campaign_name,
-    c.adgroup_id,
-    c.adgroup_name,
+    l.ad_destination,
+    l.campaign_id,
+    l.campaign_name,
+    l.adgroup_id,
+    l.adgroup_name,
     c.ad_id,
-    c.ad_name,
+    l.ad_name,
   from latest_matched_rows_grouped c
   inner join ordered_match_keys b
   on b.row_number = c.last_row
   and b.match_key = c.match_key
+  -- keyword бывает null: сравниваем через is not distinct from, как его
+  -- группирует partition by в latest_download_rows.
+  inner join latest_download_rows l
+  on l.ad_id = c.ad_id
+  and l.keyword is not distinct from c.keyword
+  and l.date = c.date
 ), 
 
--- Дополняем расходы актуальными url_params из исходной выгрузки
--- (join по row_number и match_key).
+-- Приводим строку расходов к итоговому набору колонок ad_costs.
 ad_costs as (
   select 
     d.date,
@@ -455,7 +480,7 @@ ad_costs as (
     d.landing_page_url,
     d.landing_hostname,
     d.landing_page_path,
-    b.url_params,
+    d.url_params,
     d.cost,
     d.currency,
     d.impressions,
@@ -471,9 +496,6 @@ ad_costs as (
     d.ad_id,
     d.ad_name
   from rows_with_actual_utms d
-  left join ordered_match_keys b
-  on b.row_number = d.row_number
-  and b.match_key = d.match_key
 )
 
 select * from ad_costs
@@ -603,10 +625,19 @@ ordered_match_keys as (
   select row_number() over (partition by ad_id, date order by inserted_at asc) row_number, * from source_match_keys
 ), 
 
+-- Самая свежая выгрузка объявления за день: источник метрик, названий и id.
+-- Сеть корректирует расходы прошлых дней задним числом, поэтому метрики
+-- всегда берём из последней выгрузки, даже если UTM с тех пор сменились.
+latest_download_rows as (
+  select * from ordered_match_keys
+  qualify row_number = max(row_number) over (partition by ad_id, date)
+),
+
 -- Находим объявления, у которых UTM сменились между выгрузками.
 -- Нужно, чтобы не задваивать расходы: если объявление сначала выгрузилось
 -- с UTM A, а потом пользователь сменил UTM на B, расход должен остаться
--- один раз (привязанным к актуальной метке).
+-- один раз и с первой версией меток за эту дату (A): визиты этой даты
+-- пришли с метками A, и матчинг расходов с визитами идёт по ним.
 find_ads_with_changed_utms as (
   select
     case when
@@ -624,8 +655,8 @@ ads_with_changed_utms as (
   where primary_utm_row_number is not null
 ),
 
--- Для объявлений со сменившимися UTM определяем номер строки, из которой
--- ниже брать метрики (cost/impressions/...), чтобы подтянуть их к актуальным UTM.
+-- Для объявлений со сменившимися UTM определяем последнюю строку первой
+-- версии меток: из неё ниже берутся метки, landing_page_url и url_params.
 ads_with_changed_utms_filtered as (
   select 
     first_value(primary_utm_row_number) over(partition by ad_id, date order by primary_utm_row_number asc) last_row,
@@ -647,25 +678,25 @@ latest_matched_rows as (
       (select i.last_row from ads_with_changed_utms_grouped i where i.match_key = t1.match_key),
       if((select i.last_row from ads_with_changed_utms_grouped i where i.date = t1.date and i.ad_id = t1.ad_id) is null, max(row_number) over(partition by date, ad_id), null)
     ) last_row,
-    * except(row_number, inserted_at, timezone, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay) 
+    * except(row_number, inserted_at, timezone, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay, campaign_id, campaign_name, adgroup_id, adgroup_name, ad_name, ad_destination) 
   from ordered_match_keys t1
 ),
 
--- Схлопываем размерные строки-источники в уникальные группы по match_key
--- и размерным полям объявления.
+-- Схлопываем выбранные строки-источники в уникальные группы по match_key.
+-- Группируем только по полям, входящим в match_key: названия и id сети
+-- могут меняться между выгрузками одного объявления за день, и группировка
+-- по ним размножила бы строку-источник метрик (дубль расходов).
 latest_matched_rows_grouped as (
   select * from latest_matched_rows
   where last_row is not null
-  group by match_key, date, ad_account_id, source, medium, campaign, content, term, strimix_refid, last_row, campaign_id, campaign_name, adgroup_id, adgroup_name, ad_id, ad_name, ad_destination
+  group by match_key, date, ad_account_id, source, medium, campaign, content, term, strimix_refid, ad_id, last_row
 ),
 
--- Подставляем в расходы актуальные UTM: метки берём из сгруппированной
--- строки (после смены UTM), а cost/impressions и landing — из размерной
--- выгрузки с номером last_row.
+-- Собираем строку расходов из двух выгрузок: метки берём из сгруппированной
+-- строки, landing_page_url и url_params — из выгрузки с номером last_row (первая версия
+-- меток за дату), а метрики, названия и id — из самой свежей выгрузки.
 rows_with_actual_utms as (
   select
-    b.row_number,
-    b.match_key,
     c.date, 
     c.source, 
     c.medium, 
@@ -674,30 +705,33 @@ rows_with_actual_utms as (
     c.term, 
     c.strimix_refid, 
     b.landing_page_url, 
+    b.url_params,
     cast(null as string) landing_hostname,
     cast(null as string) landing_page_path,
-    b.cost, 
-    b.currency, 
-    b.impressions, 
-    b.reach, 
-    b.clicks, 
-    b.click_delay, 
+    l.cost, 
+    l.currency, 
+    l.impressions, 
+    l.reach, 
+    l.clicks, 
+    l.click_delay, 
     'TIKTOK_ADS' data_source,
-    c.ad_destination,
-    c.campaign_id,
-    c.campaign_name,
-    c.adgroup_id,
-    c.adgroup_name,
+    l.ad_destination,
+    l.campaign_id,
+    l.campaign_name,
+    l.adgroup_id,
+    l.adgroup_name,
     c.ad_id,
-    c.ad_name,
+    l.ad_name,
   from latest_matched_rows_grouped c
   inner join ordered_match_keys b
   on b.row_number = c.last_row
   and b.match_key = c.match_key
+  inner join latest_download_rows l
+  on l.ad_id = c.ad_id
+  and l.date = c.date
 ), 
 
--- Дополняем расходы актуальными url_params из исходной выгрузки
--- (join по row_number и match_key).
+-- Приводим строку расходов к итоговому набору колонок ad_costs.
 ad_costs as (
   select 
     d.date,
@@ -711,7 +745,7 @@ ad_costs as (
     d.landing_page_url,
     d.landing_hostname,
     d.landing_page_path,
-    b.url_params,
+    d.url_params,
     d.cost,
     d.currency,
     d.impressions,
@@ -727,9 +761,6 @@ ad_costs as (
     d.ad_id,
     d.ad_name
   from rows_with_actual_utms d
-  left join ordered_match_keys b
-  on b.row_number = d.row_number
-  and b.match_key = d.match_key
 )
 
 select * from ad_costs
@@ -1028,8 +1059,8 @@ create temp table `bot_ip` as(
   where
   -- Берём IP события в bot_ip, если его подсеть (первые три октета) есть
   -- в справочнике web_bots_list.
-  regexp_extract(device_info.ip, r'^(\\\\d+\\\\.\\\\d+\\\\.\\\\d+)') in 
-    (select distinct(regexp_extract(ip, r'^(\\\\d+\\\\.\\\\d+\\\\.\\\\d+)')) from `bi-200.service_eu.web_bots_list`
+  regexp_extract(device_info.ip, r'^(\\d+\\.\\d+\\.\\d+)') in 
+    (select distinct(regexp_extract(ip, r'^(\\d+\\.\\d+\\.\\d+)')) from `bi-200.service_eu.web_bots_list`
     where bot like '%facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)%'
     or bot like '%Googlebot%'
     /*or bot like '%YandexBot%' - временно отключено: список IP этого бота требует чистки*/
@@ -2070,9 +2101,8 @@ present_signals as (
 -- остаётся один синтетический визит. Если на одном экземпляре сработало
 -- (прошло фильтры срабатывания) несколько маппингов, выигрывает маппинг
 -- с меньшим priority.
--- Кросс-сущностной дедупликации сознательно нет: событие, совпавшее с
--- маппингами разных сущностей, даёт визит на каждую (это управляется
--- настройкой event_name).
+-- Разные сущности здесь не схлопываются; если их якоря совпали на одном
+-- событии, ниже (allowed_signals) остаётся один визит на событие-якорь.
 deduped_signals as (
   select * from present_signals
   qualify row_number() over (partition by entity, entity_id order by priority asc, mapping_id asc) = 1
@@ -2083,7 +2113,13 @@ deduped_signals as (
 -- last-click у точного веб-визита). mode='override': визит создаётся
 -- всегда и за счёт «минус 1 мс» становится последней маркированной точкой
 -- касания перед конверсией. Проверка идёт по staging-визитам текущего
--- прогона (на этот момент там только веб-визиты)
+-- прогона (на этот момент там только веб-визиты).
+-- Затем оставляем один синтетический визит на событие-якорь (меньший
+-- priority побеждает): якорь становится visits.first_event_id, а шаги 5-6
+-- присоединяют события к визитам по нему, поэтому два визита на одном
+-- событии задвоили бы это событие в attributed_events и orders/deals.
+-- Так бывает, когда маппинги разных сущностей (order и deal, order и event)
+-- сработали на одном событии.
 allowed_signals as (
   select s.* from deduped_signals as s
   where s.mode = 'override'
@@ -2093,6 +2129,7 @@ allowed_signals as (
     and v.marked_visit_id is not null
     and v.timestamp <= s.timestamp
   )
+  qualify row_number() over (partition by s.event_id order by s.priority asc, s.mapping_id asc) = 1
 ),
 
 -- Уровень объявления. Ищем строки ad_costs так:
@@ -2337,6 +2374,7 @@ select
   timestamp - 1 as timestamp,
   profile_id,
   visit_id,
+  -- Окончательное значение считается на шаге 4.3 по всем визитам профиля.
   false as is_first_visit,
   visit_id as non_direct_visit_id,
   visit_id as marked_visit_id,
@@ -2625,12 +2663,25 @@ execute immediate (query);
 -- на уже вычисленный traffic_origin через traffic_origin_regex). Если ни
 -- одно правило не совпало, подставляем 'Other'. Полностью готовый результат
 -- одним create or replace заменяет таблицу visits.
+-- is_first_visit пересчитываем здесь по ВСЕМ визитам профиля (веб +
+-- синтетика): на шаге 4 он считался только по веб-визитам, до вставки
+-- синтетики. Первым становится самый ранний визит профиля любого типа.
 set query_template = """
 create or replace table `<project_name>.<dataset_name>.visits`
 partition by date options (require_partition_filter = false) as (
   select
-    v.* replace(coalesce(m.traffic_channel, 'Other') as traffic_channel)
-  from `visits_with_origin` as v
+    v.* except(_is_first_visit) replace(
+      coalesce(m.traffic_channel, 'Other') as traffic_channel,
+      v._is_first_visit as is_first_visit
+    )
+  -- BigQuery запрещает оконные функции внутри select * replace, поэтому флаг
+  -- считается во вспомогательной колонке подзапроса.
+  from (
+    select
+      *,
+      first_value(visit_id) over (partition by profile_id order by timestamp asc, visit_id asc) = visit_id as _is_first_visit
+    from `visits_with_origin`
+  ) as v
   left join (
     select
       t.visit_id,

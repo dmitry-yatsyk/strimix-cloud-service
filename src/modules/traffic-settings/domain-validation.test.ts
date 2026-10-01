@@ -282,11 +282,28 @@ test('the param container is a consequence of the entity, not a free choice', ()
       mappingDraft({
         entity: 'event',
         param_source: 'event_params',
+        event_name: 'offline_attribution',
         source_param_key: 'utm_source',
       }),
     ).errors,
     [],
   )
+})
+
+test('an event mapping needs a concrete event name other than page_view', () => {
+  const eventMapping = (event_name: string | null) =>
+    validateAttributionSignalMappingInput(
+      mappingDraft({
+        entity: 'event',
+        param_source: 'event_params',
+        event_name,
+        source_param_key: 'utm_source',
+      }),
+    ).errors
+  assert.ok(codes(eventMapping(null)).includes('EVENT_NAME_REQUIRED_FOR_EVENT_ENTITY'))
+  assert.ok(codes(eventMapping('  ')).includes('EVENT_NAME_REQUIRED_FOR_EVENT_ENTITY'))
+  assert.ok(codes(eventMapping('page_view')).includes('PAGE_VIEW_NOT_ALLOWED_FOR_EVENT_ENTITY'))
+  assert.deepEqual(eventMapping('lead_form_submit'), [])
 })
 
 test('a mapping that extracts nothing is rejected', () => {
