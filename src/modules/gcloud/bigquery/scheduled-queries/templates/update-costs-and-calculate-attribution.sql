@@ -408,7 +408,10 @@ latest_matched_rows as (
     if(
       match_key in (select i.match_key from ads_with_changed_utms_grouped i where i.match_key = t1.match_key),
       (select i.last_row from ads_with_changed_utms_grouped i where i.match_key = t1.match_key),
-      if((select i.last_row from ads_with_changed_utms_grouped i where i.date = t1.date and i.ad_id = t1.ad_id and i.keyword = t1.keyword) is null, max(row_number) over(partition by date, ad_id, keyword), null)
+      -- keyword бывает null (PMax, Display, Demand Gen, Video, Smart, Shopping, App, DSA):
+      -- сравниваем через is not distinct from, иначе null = null не находит первую версию
+      -- меток, и последующие версии остаются в выборке — расход задваивается.
+      if((select i.last_row from ads_with_changed_utms_grouped i where i.date = t1.date and i.ad_id = t1.ad_id and i.keyword is not distinct from t1.keyword) is null, max(row_number) over(partition by date, ad_id, keyword), null)
     ) last_row,
     * except(row_number, inserted_at, timezone, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay, campaign_id, campaign_name, adgroup_id, adgroup_name, ad_name, ad_destination) 
   from ordered_match_keys t1
