@@ -33,6 +33,11 @@ export const AD_COSTS_TABLE_SCHEMA = [
   { name: 'click_delay', type: 'BOOLEAN' },
   { name: 'data_source', type: 'STRING' },
   { name: 'ad_destination', type: 'STRING' },
+  // Ad account of the row; the name is the latest known for the account, the
+  // same on every date. Added at the end, as migrated tables get them
+  // (src/scripts/migrate-ad-account-columns.ts).
+  { name: 'ad_account_id', type: 'STRING' },
+  { name: 'ad_account_name', type: 'STRING' },
   { name: 'campaign_id', type: 'STRING' },
   { name: 'campaign_name', type: 'STRING' },
   { name: 'adgroup_id', type: 'STRING' },

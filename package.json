@@ -11,7 +11,8 @@
     "format": "npx eslint ./src --fix",
     "test": "npx tsx --test \"src/**/*.test.ts\"",
     "migrate:traffic-settings": "npx tsx src/scripts/migrate-traffic-settings.ts",
-    "dryrun:traffic-settings": "npx tsx src/scripts/dryrun-traffic-settings.ts"
+    "dryrun:traffic-settings": "npx tsx src/scripts/dryrun-traffic-settings.ts",
+    "migrate:ad-account-columns": "npx tsx src/scripts/migrate-ad-account-columns.ts"
   },
   "author": "",
   "license": "ISC",

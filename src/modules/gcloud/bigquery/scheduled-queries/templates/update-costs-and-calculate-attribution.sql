@@ -139,7 +139,7 @@ latest_matched_rows as (
       (select i.last_row from ads_with_changed_utms_grouped i where i.match_key = t1.match_key),
       if((select i.last_row from ads_with_changed_utms_grouped i where i.date = t1.date and i.ad_id = t1.ad_id) is null, max(row_number) over(partition by date, ad_id), null)
     ) last_row,
-    * except(row_number, inserted_at, timezone, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay, campaign_id, campaign_name, adset_id, adset_name, ad_name, ad_destination) 
+    * except(row_number, inserted_at, timezone, ad_account_name, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay, campaign_id, campaign_name, adset_id, adset_name, ad_name, ad_destination) 
   from ordered_match_keys t1
 ),
 
@@ -159,6 +159,7 @@ latest_matched_rows_grouped as (
 rows_with_actual_utms as (
   select
     c.date, 
+    c.ad_account_id,
     c.source, 
     c.medium, 
     c.campaign, 
@@ -192,6 +193,16 @@ rows_with_actual_utms as (
   and l.date = c.date
 ), 
 
+-- Последнее известное название каждого рекламного аккаунта: одно на все даты,
+-- чтобы после переименования аккаунт не распадался на две строки в отчётах.
+account_names as (
+  select
+    ad_account_id,
+    array_agg(ad_account_name ignore nulls order by inserted_at desc limit 1)[safe_offset(0)] ad_account_name
+  from `<project_name>.<dataset_name>.facebook_ads_ad_costs`
+  group by ad_account_id
+),
+
 -- Приводим строку расходов к итоговому набору колонок ad_costs.
 ad_costs as (
   select 
@@ -220,8 +231,12 @@ ad_costs as (
     d.adset_id adgroup_id,
     d.adset_name adgroup_name,
     d.ad_id,
-    d.ad_name
+    d.ad_name,
+    d.ad_account_id,
+    n.ad_account_name
   from rows_with_actual_utms d
+  left join account_names n
+  on n.ad_account_id = d.ad_account_id
 )
 
 select * from ad_costs
@@ -257,7 +272,9 @@ when not matched by target then insert (
   adgroup_id,
   adgroup_name,
   ad_id,
-  ad_name
+  ad_name,
+  ad_account_id,
+  ad_account_name
 ) values (
   s.date,
   s.ad_platform,
@@ -284,7 +301,9 @@ when not matched by target then insert (
   s.adgroup_id,
   s.adgroup_name,
   s.ad_id,
-  s.ad_name
+  s.ad_name,
+  s.ad_account_id,
+  s.ad_account_name
 )
 -- WHEN NOT MATCHED BY SOURCE: каждую старую строку этой сети (FACEBOOK_ADS)
 -- удаляем из ad_costs; строки других сетей условие не затрагивает.
@@ -413,7 +432,7 @@ latest_matched_rows as (
       -- меток, и последующие версии остаются в выборке — расход задваивается.
       if((select i.last_row from ads_with_changed_utms_grouped i where i.date = t1.date and i.ad_id = t1.ad_id and i.keyword is not distinct from t1.keyword) is null, max(row_number) over(partition by date, ad_id, keyword), null)
     ) last_row,
-    * except(row_number, inserted_at, timezone, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay, campaign_id, campaign_name, adgroup_id, adgroup_name, ad_name, ad_destination) 
+    * except(row_number, inserted_at, timezone, ad_account_name, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay, campaign_id, campaign_name, adgroup_id, adgroup_name, ad_name, ad_destination) 
   from ordered_match_keys t1
 ),
 
@@ -433,6 +452,7 @@ latest_matched_rows_grouped as (
 rows_with_actual_utms as (
   select
     c.date, 
+    c.ad_account_id,
     c.source, 
     c.medium, 
     c.campaign, 
@@ -469,6 +489,16 @@ rows_with_actual_utms as (
   and l.date = c.date
 ), 
 
+-- Последнее известное название каждого рекламного аккаунта: одно на все даты,
+-- чтобы после переименования аккаунт не распадался на две строки в отчётах.
+account_names as (
+  select
+    ad_account_id,
+    array_agg(ad_account_name ignore nulls order by inserted_at desc limit 1)[safe_offset(0)] ad_account_name
+  from `<project_name>.<dataset_name>.google_ads_ad_costs`
+  group by ad_account_id
+),
+
 -- Приводим строку расходов к итоговому набору колонок ad_costs.
 ad_costs as (
   select 
@@ -497,8 +527,12 @@ ad_costs as (
     d.adgroup_id,
     d.adgroup_name,
     d.ad_id,
-    d.ad_name
+    d.ad_name,
+    d.ad_account_id,
+    n.ad_account_name
   from rows_with_actual_utms d
+  left join account_names n
+  on n.ad_account_id = d.ad_account_id
 )
 
 select * from ad_costs
@@ -534,7 +568,9 @@ when not matched by target then insert (
   adgroup_id,
   adgroup_name,
   ad_id,
-  ad_name
+  ad_name,
+  ad_account_id,
+  ad_account_name
 ) values (
   s.date,
   s.ad_platform,
@@ -561,7 +597,9 @@ when not matched by target then insert (
   s.adgroup_id,
   s.adgroup_name,
   s.ad_id,
-  s.ad_name
+  s.ad_name,
+  s.ad_account_id,
+  s.ad_account_name
 )
 -- WHEN NOT MATCHED BY SOURCE: каждую старую строку этой сети (GOOGLE_ADS)
 -- удаляем из ad_costs; строки других сетей условие не затрагивает.
@@ -681,7 +719,7 @@ latest_matched_rows as (
       (select i.last_row from ads_with_changed_utms_grouped i where i.match_key = t1.match_key),
       if((select i.last_row from ads_with_changed_utms_grouped i where i.date = t1.date and i.ad_id = t1.ad_id) is null, max(row_number) over(partition by date, ad_id), null)
     ) last_row,
-    * except(row_number, inserted_at, timezone, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay, campaign_id, campaign_name, adgroup_id, adgroup_name, ad_name, ad_destination) 
+    * except(row_number, inserted_at, timezone, ad_account_name, landing_page_url, url_params, cost, currency, impressions, reach, clicks, click_delay, campaign_id, campaign_name, adgroup_id, adgroup_name, ad_name, ad_destination) 
   from ordered_match_keys t1
 ),
 
@@ -701,6 +739,7 @@ latest_matched_rows_grouped as (
 rows_with_actual_utms as (
   select
     c.date, 
+    c.ad_account_id,
     c.source, 
     c.medium, 
     c.campaign, 
@@ -734,6 +773,16 @@ rows_with_actual_utms as (
   and l.date = c.date
 ), 
 
+-- Последнее известное название каждого рекламного аккаунта: одно на все даты,
+-- чтобы после переименования аккаунт не распадался на две строки в отчётах.
+account_names as (
+  select
+    ad_account_id,
+    array_agg(ad_account_name ignore nulls order by inserted_at desc limit 1)[safe_offset(0)] ad_account_name
+  from `<project_name>.<dataset_name>.tiktok_ads_ad_costs`
+  group by ad_account_id
+),
+
 -- Приводим строку расходов к итоговому набору колонок ad_costs.
 ad_costs as (
   select 
@@ -762,8 +811,12 @@ ad_costs as (
     d.adgroup_id,
     d.adgroup_name,
     d.ad_id,
-    d.ad_name
+    d.ad_name,
+    d.ad_account_id,
+    n.ad_account_name
   from rows_with_actual_utms d
+  left join account_names n
+  on n.ad_account_id = d.ad_account_id
 )
 
 select * from ad_costs
@@ -799,7 +852,9 @@ when not matched by target then insert (
   adgroup_id,
   adgroup_name,
   ad_id,
-  ad_name
+  ad_name,
+  ad_account_id,
+  ad_account_name
 ) values (
   s.date,
   s.ad_platform,
@@ -826,7 +881,9 @@ when not matched by target then insert (
   s.adgroup_id,
   s.adgroup_name,
   s.ad_id,
-  s.ad_name
+  s.ad_name,
+  s.ad_account_id,
+  s.ad_account_name
 )
 -- WHEN NOT MATCHED BY SOURCE: каждую старую строку этой сети (TIKTOK_ADS)
 -- удаляем из ad_costs; строки других сетей условие не затрагивает.

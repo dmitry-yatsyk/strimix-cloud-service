@@ -4,6 +4,7 @@ export const GOOGLE_ADS_AD_COSTS_TABLE_SCHEMA = [
   { name: 'inserted_at', type: 'INTEGER' },
   { name: 'date', type: 'DATE' },
   { name: 'ad_account_id', type: 'STRING' },
+  { name: 'ad_account_name', type: 'STRING' },
   { name: 'timezone', type: 'STRING' },
   { name: 'source', type: 'STRING' },
   { name: 'medium', type: 'STRING' },
